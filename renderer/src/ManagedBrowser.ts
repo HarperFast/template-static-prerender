@@ -1,21 +1,58 @@
+/**
+ * @module ManagedBrowser
+ *
+ * Provides a wrapper around Puppeteer's {@link Browser} to manage its lifecycle
+ * and control concurrency of page usage.
+ *
+ * Responsibilities:
+ * - Track number of active and total pages.
+ * - Enforce a configurable maximum number of concurrent active pages.
+ * - Automatically close pages/contexts on error.
+ * - Support incognito contexts (`INCOGNITO_PAGES` mode).
+ * - Provide lifecycle management (close/kill browser).
+ *
+ * Integrates with:
+ * - {@link puppeteer} for browser/page automation.
+ * - {@link Logger} for error reporting.
+ */
+
 import EventEmitter from 'events';
 import puppeteer, { Browser, LaunchOptions, Page } from 'puppeteer';
 import logger from './util/Logger.js';
 import { setTimeout } from 'timers';
-import { INCOGNITO_PAGES } from './env.js';
+import { INCOGNITO_PAGES } from './util/env.js';
 
+/**
+ * Options for managing a browser instance.
+ */
 type ManagedBrowserOptions = {
+	/** Maximum number of concurrently active pages. Defaults to 5. */
 	maxActivePages?: number;
 };
+
+/**
+ * Configuration for launching a {@link ManagedBrowser}.
+ * Extends {@link ManagedBrowserOptions}.
+ */
 type ManagedBrowserConfig = ManagedBrowserOptions & {
+	/** Puppeteer launch options. */
 	puppeteerLaunchOptions?: LaunchOptions;
 };
 
+/**
+ * A managed wrapper around Puppeteer's {@link Browser}.
+ *
+ * Tracks active page count, enforces concurrency limits, and provides
+ * lifecycle utilities for graceful shutdown.
+ *
+ * Events:
+ * - `open-slot`: Emitted when a previously full browser regains an available page slot.
+ */
 export default class ManagedBrowser extends EventEmitter {
-	// Maximum number of concurrently active pages permitted for this instance.
+	/** Maximum number of concurrently active pages permitted. */
 	maxActivePages: number;
 
-	// Underlying Puppeteer browser.
+	/** Underlying Puppeteer browser instance. */
 	browser: Browser;
 
 	/**
@@ -24,10 +61,10 @@ export default class ManagedBrowser extends EventEmitter {
 	 */
 	jobRefs: number = 0;
 
-	// Current count of open pages (decremented on page `'close'`).
+	/** Current number of open pages. */
 	activePages: number = 0;
 
-	// Monotonic count of pages opened by this browser (never decremented).
+	/** Total number of pages opened since launch (monotonic counter). */
 	totalOpenedPages: number = 0;
 
 	protected constructor(browser: Browser, options?: ManagedBrowserOptions) {
@@ -36,9 +73,19 @@ export default class ManagedBrowser extends EventEmitter {
 		this.maxActivePages = options?.maxActivePages ?? 5;
 	}
 
+	/**
+	 * Launch a new managed Puppeteer browser.
+	 *
+	 * - Applies Puppeteer launch options if provided.
+	 * - Attaches error listeners to automatically close failing pages.
+	 *
+	 * @param {ManagedBrowserConfig} [config] - Launch configuration.
+	 * @returns {Promise<ManagedBrowser>} Managed browser instance.
+	 */
 	static async launch(config?: ManagedBrowserConfig) {
 		const browser = await puppeteer.launch(config?.puppeteerLaunchOptions);
 
+		// Auto-close pages that error
 		browser.on('targetcreated', async (target) => {
 			try {
 				const page = await target.page();
@@ -66,6 +113,16 @@ export default class ManagedBrowser extends EventEmitter {
 		return this.maxActivePages - this.activePages;
 	}
 
+	/**
+	 * Acquire a new Puppeteer {@link Page}.
+	 *
+	 * - Increments active page counters.
+	 * - Uses incognito contexts if `INCOGNITO_PAGES` is enabled.
+	 * - Emits `open-slot` when a page is closed and a slot reopens.
+	 *
+	 * @returns {Promise<Page>} A new Puppeteer page.
+	 * @throws If page creation fails.
+	 */
 	async getPage() {
 		this.activePages++;
 		this.totalOpenedPages++;
@@ -103,8 +160,10 @@ export default class ManagedBrowser extends EventEmitter {
 	}
 
 	/**
-	 * Closes the given Puppeteer page.
-	 * Errors during close are ignored.
+	 * Closes a Puppeteer page.
+	 * Errors during close are caught and logged.
+	 *
+	 * @param {Page} page - The Puppeteer page to close.
 	 */
 	async closePage(page: Page) {
 		try {
@@ -116,7 +175,7 @@ export default class ManagedBrowser extends EventEmitter {
 
 	/**
 	 * Attempts to close the browser gracefully.
-	 * Schedules a force kill after 5 seconds to ensure the process exits.
+	 * If not closed within 5 seconds, calls {@link kill}.
 	 */
 	async close() {
 		try {
@@ -131,8 +190,8 @@ export default class ManagedBrowser extends EventEmitter {
 	}
 
 	/**
-	 * Force kills the underlying browser process with `SIGKILL` if not already closed.
-	 * Also attempts a graceful close before sending SIGKILL.
+	 * Force kills the underlying browser process with `SIGKILL`.
+	 * Ensures browser process exits even if `close` fails.
 	 */
 	async kill() {
 		const process = this.browser.process();

@@ -1,16 +1,46 @@
+/**
+ * @module http
+ *
+ * Provides HTTP utilities for worker-to-Harper communication.
+ *
+ * Responsibilities:
+ * - Claiming jobs from the `/render_jobs` endpoint.
+ * - Registering workers with the orchestrator service.
+ * - Submitting job results (with compressed content and metadata).
+ *
+ * Integrates with:
+ * - {@link RenderJob} for job metadata.
+ * - Harper environment configuration (`env.js`).
+ * - {@link undici.Pool} for efficient HTTP connection pooling.
+ */
+
 import { gzip } from 'zlib';
 import { Pool } from 'undici';
 import { promisify } from 'node:util';
-import { STATE, HDB_HTTP_PORT, HDB_PASS, HDB_USER, WORKER_ID, setHdbHost, CONCURRENCY } from '../env.js';
+import { STATE, HDB_HTTP_PORT, HDB_PASS, HDB_USER, WORKER_ID, setHdbHost, CONCURRENCY } from '../util/env.js';
 import RenderJob from '../RenderJob.js';
 import logger from '../util/Logger.js';
 
 const pGzip = promisify(gzip);
 
+/**
+ * Selected protocol based on environment.
+ * Uses HTTPS in production, HTTP otherwise.
+ * @type {"http"|"https"}
+ */
 const protocol = process.env.NODE_ENV === 'production' ? `https` : 'http';
 
+/**
+ * Shared HTTP connection pool for communicating with Harper.
+ * Initially configured with one connection; resized during registration.
+ * @type {Pool}
+ */
 let pool = new Pool(`${protocol}://${STATE.HDB_HOST}`, { connections: 1 });
 
+/**
+ * Default configuration for outbound requests to Harper.
+ * Includes authorization headers and worker identification.
+ */
 const BASE_CONFIG = {
 	method: 'POST',
 	headers: {
@@ -21,6 +51,12 @@ const BASE_CONFIG = {
 	keepalive: true,
 };
 
+/**
+ * Fetch jobs from Harper’s `/render_jobs` endpoint.
+ *
+ * @param {number} limit - Maximum number of jobs to claim.
+ * @returns {Promise<RenderJob[]>} Array of claimed jobs.
+ */
 export const fetchJobs = async (limit: number): Promise<RenderJob[]> => {
 	logger.info(`Worker ${WORKER_ID} fetching jobs...`);
 	const res = await pool.request({
@@ -39,6 +75,16 @@ export const fetchJobs = async (limit: number): Promise<RenderJob[]> => {
 	return data;
 };
 
+/**
+ * Register this worker with Harper.
+ *
+ * - Calls `/render_jobs` with `register-worker` op.
+ * - Updates the active Harper host via {@link setHdbHost}.
+ * - Resizes the connection pool to match configured concurrency.
+ *
+ * @returns {Promise<void>}
+ * @throws {Error} If registration fails.
+ */
 export const register = async (): Promise<void> => {
 	logger.info(`Worker ${WORKER_ID} registering...`);
 	const res = await fetch(`${protocol}://${STATE.HDB_HOST}:${HDB_HTTP_PORT}/render_jobs`, {
@@ -58,12 +104,23 @@ export const register = async (): Promise<void> => {
 
 	const data = await res.json();
 
+	// Update DB host and reset pool with concurrency setting
 	setHdbHost(data.host);
-
 	pool.destroy();
 	pool = new Pool(`${protocol}://${STATE.HDB_HOST}:${HDB_HTTP_PORT}`, { connections: CONCURRENCY });
 };
 
+/**
+ * Send job results back to Harper.
+ *
+ * - Compresses job content with gzip if present.
+ * - Attaches job metadata (render time, redirects, upstream headers).
+ * - Posts to `/render_jobs/result`.
+ *
+ * @param {RenderJob} job - Job object containing metadata, content, and response details.
+ * @returns {Promise<void>}
+ * @throws {Error} If the server responds with a non-204 status code.
+ */
 export const sendJobResult = async (job: RenderJob): Promise<void> => {
 	logger.info(`Worker ${WORKER_ID} sending job ${job.id} result...`);
 	const headers: Record<string, string> = {

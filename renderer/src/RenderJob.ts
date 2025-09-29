@@ -1,25 +1,72 @@
+/**
+ * @module RenderJob
+ *
+ * Defines the {@link RenderJob} class, which represents a single rendering
+ * request to be processed by a worker.
+ *
+ * Responsibilities:
+ * - Store metadata about the job (URL, headers, priority, device type).
+ * - Track multiple render attempts and their outcomes.
+ * - Retain origin HTTP response metadata in a sanitized form.
+ * - Support redirect handling (URL + status code).
+ * - Provide convenience methods for retries, content, and error inspection.
+ */
+
 export type JobConfig = {
+	/** Unique job identifier. */
 	id: string;
+
+	/** Absolute URL to render. */
 	url: string;
+
+	/** Job scheduling priority (lower = higher priority). */
 	priority: number;
+
+	/** Optional request headers to send to the origin. */
 	headers?: Record<string, string>;
+
+	/** Maximum number of retries allowed. Defaults to {@link RenderJob.MAX_ATTEMPTS}. */
 	maxRetries?: number;
+
+	/** Device type to emulate. */
 	deviceType?: 'desktop' | 'mobile' | 'tablet';
+
+	/** Optional Accept-Language header to use. */
 	acceptLanguage?: string;
 };
 
+/**
+ * Represents a single render attempt for a job.
+ */
 type RenderAttempt = {
+	/** Start time of the render attempt (epoch ms). */
 	renderStartTime: number;
+
+	/** End time of the render attempt (epoch ms). */
 	renderEndTime?: number;
+
+	/** Error encountered during rendering, if any. */
 	error?: Error;
+
+	/** Captured content (HTML, etc.) from the render attempt, if successful. */
 	content?: string;
 };
 
+/**
+ * Represents the origin HTTP response associated with a render job.
+ */
 type OriginHttpResponse = {
+	/** HTTP status code returned from the origin. */
 	statusCode: number;
+
+	/** Sanitized set of response headers. */
 	headers: Record<string, string>;
 };
 
+/**
+ * Response headers allowed to be persisted.
+ * Other headers are discarded for safety and consistency.
+ */
 const allowedResponseHeaders = [
 	'etag', // helps 304 Not Modified
 	'last-modified', // helps 304 Not Modified
@@ -28,44 +75,54 @@ const allowedResponseHeaders = [
 	'retry-after', // for 503 responses
 ];
 
+/**
+ * Represents a rendering job to be executed by a worker.
+ *
+ * A `RenderJob`:
+ * - Encapsulates job configuration (URL, headers, device type).
+ * - Tracks attempts and their outcomes.
+ * - Supports retry logic with a configurable maximum.
+ * - Stores sanitized origin response headers for caching and revalidation.
+ * - Handles redirect metadata when applicable.
+ */
 export default class RenderJob {
-	// Default maximum attempts used when `maxRetries` is not provided.
+	/** Default maximum number of attempts if `maxRetries` not provided. */
 	static MAX_ATTEMPTS = 3;
 
-	// Unique job id.
+	/** Unique job id. */
 	id: string;
 
-	// Absolute URL to render.
+	/** Absolute URL to render. */
 	url: string;
 
-	// Scheduling priority; semantics are defined by the scheduler.
+	/** Scheduling priority. */
 	priority: number;
 
-	// Maximum number of render attempts allowed for this job.
+	/** Maximum number of render attempts allowed for this job. */
 	maxAttempts: number;
 
-	// Optional request headers to send to origin.
+	/** Optional request headers to send to origin. */
 	headers?: Record<string, string>;
 
-	// Device type to emulate (if any).
+	/** Device type to emulate (if any). */
 	deviceType?: 'desktop' | 'mobile' | 'tablet';
 
-	// Accept-Language header value to use (if any).
+	/** Accept-Language header value to use (if any). */
 	acceptLanguage?: string;
 
-	// URL to redirect the job result to (if any).
+	/** Redirect target URL, if this job results in a redirect. */
 	redirectTo?: string;
 
-	// HTTP status code to use for the redirect (if any).
+	/** Redirect status code, if applicable. */
 	redirectStatus?: number;
 
-	// Origin HTTP response info (if any).
+	/** Origin HTTP response information (status + headers). */
 	_httpResponse?: OriginHttpResponse;
 
-	// All attempts in order (first → latest).
+	/** All render attempts (in order). */
 	attempts: RenderAttempt[] = [];
 
-	// Convenience pointer to the most recent attempt (if any).
+	/** Convenience pointer to the most recent attempt. */
 	latestAttempt: RenderAttempt | null = null;
 
 	constructor(config: JobConfig) {
@@ -78,6 +135,11 @@ export default class RenderJob {
 		this.acceptLanguage = config.acceptLanguage;
 	}
 
+	/**
+	 * Sanitize response headers to only include {@link allowedResponseHeaders}.
+	 * @param {Record<string,string>} headers - Incoming headers.
+	 * @returns {Record<string,string>} Sanitized headers.
+	 */
 	sanitizeHeaders(headers: Record<string, string>) {
 		const sanitized: Record<string, string> = {};
 		for (const header of allowedResponseHeaders) {
@@ -88,21 +150,37 @@ export default class RenderJob {
 		return sanitized;
 	}
 
+	/**
+	 * Set the origin HTTP response metadata for this job.
+	 * Headers are sanitized before storage.
+	 */
 	set httpResponse(response: OriginHttpResponse) {
 		const { statusCode, headers } = response;
 		this._httpResponse = { statusCode, headers: this.sanitizeHeaders(headers) };
 	}
 
+	/**
+	 * Get the origin HTTP response metadata.
+	 */
 	get httpResponse(): OriginHttpResponse | undefined {
 		return this._httpResponse;
 	}
 
+	/**
+	 * Record the start of a new render attempt.
+	 * @returns {RenderAttempt} The newly created attempt object.
+	 */
 	attemptStarted() {
 		this.latestAttempt = { renderStartTime: Date.now() };
 		this.attempts.push(this.latestAttempt);
 		return this.latestAttempt;
 	}
 
+	/**
+	 * Record the end of the current render attempt.
+	 * @param {Error} [error] - Error encountered, if any.
+	 * @param {string} [content] - Captured content, if successful.
+	 */
 	attemptEnded(error?: Error, content?: string) {
 		const attempt = this.latestAttempt!;
 		attempt.renderEndTime = Date.now();
@@ -110,18 +188,33 @@ export default class RenderJob {
 		attempt.content = content;
 	}
 
+	/**
+	 * Get the content from the latest attempt, if any.
+	 */
 	get content(): string | null {
 		return this.latestAttempt?.content || null;
 	}
 
+	/**
+	 * Get the error from the latest attempt, if any.
+	 */
 	get error(): Error | null {
 		return this.latestAttempt?.error || null;
 	}
 
+	/**
+	 * Determine if this job can be retried.
+	 * @returns {boolean} True if retries remain, otherwise false.
+	 */
 	canRetry(): boolean {
 		return this.attempts.length < this.maxAttempts;
 	}
 
+	/**
+	 * Set redirect metadata for this job.
+	 * @param {string} to - Target redirect URL.
+	 * @param {number} statusCode - HTTP status code for the redirect.
+	 */
 	onRedirect(to: string, statusCode: number) {
 		this.redirectTo = to;
 		this.redirectStatus = statusCode;

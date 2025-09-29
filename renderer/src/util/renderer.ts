@@ -1,12 +1,53 @@
+/**
+ * @module renderer
+ *
+ * Defines the default {@link Renderer} implementation used by {@link RenderWorker}.
+ *
+ * Responsibilities:
+ * - Configure Puppeteer page state for consistent prerendering:
+ *   - Emulate device type (desktop, mobile, tablet).
+ *   - Apply Accept-Language headers.
+ *   - Force polyfills for Web Components and CSS shims.
+ *   - Normalize CSS media and color scheme.
+ * - Intercept requests to:
+ *   - Add SEO-specific headers (`x-seo-prerender-request`).
+ *   - Merge custom headers provided in the job.
+ *   - Block heavy resources (images, media, fonts).
+ * - Intercept responses to:
+ *   - Capture HTTP response metadata (status, headers).
+ *   - Abort navigation on errors (>=400).
+ *   - Handle redirects (>=300).
+ * - Post-process final DOM:
+ *   - Ensure proper `<base>` element.
+ *   - Strip JavaScript for static snapshotting.
+ *   - Serialize full document content.
+ *
+ * Integrates with:
+ * - {@link RenderJob} for request headers, device type, language, and response metadata.
+ * - {@link Worker.Renderer} interface as the render pipeline function.
+ * - Puppeteer {@link Page} APIs for navigation and interception.
+ */
+
 import path from 'path';
 import { KnownDevices, Page } from 'puppeteer';
-import RenderJob from './RenderJob.js';
-import { Renderer } from './Worker.js';
+import RenderJob from '../RenderJob.js';
+import { Renderer } from '../Worker.js';
 import { GOTO_TIMEOUT, WAIT_FOR_EVENT } from './env.js';
 
+/**
+ * Default rendering pipeline function.
+ *
+ * Sets up page state, intercepts requests/responses, navigates to the target URL,
+ * and extracts sanitized HTML content suitable for caching or serving to bots.
+ *
+ * @param {Page} page - Puppeteer page instance.
+ * @param {RenderJob} job - The render job configuration.
+ * @returns {Promise<string|undefined>} Serialized static HTML content, or `undefined` if request failed.
+ */
 const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | undefined> => {
 	const { url, deviceType, acceptLanguage } = job;
 
+	// Page setup tasks (headers, polyfills, viewport, UA).
 	const setupPromises = [
 		page.setRequestInterception(true),
 		page.evaluateOnNewDocument(
@@ -22,6 +63,7 @@ const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | 
 		);
 	}
 
+	// Device emulation (desktop, mobile, tablet).
 	switch (deviceType) {
 		case 'mobile':
 			setupPromises.push(
@@ -63,6 +105,7 @@ const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | 
 	const abortController = new AbortController();
 	let aborted = false;
 
+	// Request/response interception.
 	page
 		.on('request', (req) => {
 			if (aborted) {
@@ -71,8 +114,8 @@ const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | 
 			}
 
 			if (req.isNavigationRequest()) {
+				// Add SEO prerender headers and job-provided headers.
 				const headers = req.headers();
-
 				headers['x-seo-prerender-request'] = 'true';
 
 				if (job.headers) {
@@ -83,6 +126,7 @@ const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | 
 
 				req.continue({ headers });
 			} else if (req.resourceType() === 'image' || req.resourceType() === 'media' || req.resourceType() === 'font') {
+				// Block heavy resources.
 				req.abort();
 			} else {
 				// For all other requests, continue without modification
@@ -102,6 +146,7 @@ const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | 
 					abortController.abort();
 					aborted = true;
 				} else if (status >= 300 && headers.location) {
+					// Capture redirects.
 					const baseUrl = new URL(req.url()).origin;
 					job.onRedirect(new URL(headers.location, baseUrl).href, status);
 				}
@@ -110,7 +155,7 @@ const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | 
 
 	await Promise.all(setupPromises);
 
-	// Normalize CSS behavior regardless of host/device defaults.
+	// Normalize CSS/media defaults.
 	await page.emulateMediaType('screen');
 	await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
 
@@ -129,6 +174,7 @@ const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | 
 		const statusCode = job.httpResponse.statusCode;
 
 		if (statusCode === 200 || statusCode === 202 || statusCode === 304) {
+			// Extract sanitized HTML snapshot.
 			const { origin, pathname = '' } = URL.parse(page.url())!;
 			const content = await page.evaluate(postProcess, origin, path.dirname(pathname));
 
@@ -139,7 +185,18 @@ const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | 
 
 export default renderer;
 
+/**
+ * In-page post-processing function.
+ *
+ * Injected into the DOM to normalize base URLs, strip scripts, and serialize
+ * the full HTML for static prerender output.
+ *
+ * @param {string} origin - Origin of the current URL.
+ * @param {string} directory - Directory path of the current URL.
+ * @returns {string} Serialized static HTML.
+ */
 function postProcess(origin: string, directory: string) {
+	// Ensure <base> element points to correct origin/directory.
 	const bases = document.head.querySelectorAll('base');
 	if (bases.length) {
 		// Patch existing <base> if it is relative.
@@ -160,12 +217,12 @@ function postProcess(origin: string, directory: string) {
 		document.head.insertAdjacentElement('afterbegin', base);
 	}
 
-	// Strip only script tags that contain JavaScript (either no type attribute or one that contains "javascript")
+	// Remove JavaScript-bearing script/link tags.
 	document
 		.querySelectorAll('script:not([type]), script[type*="javascript"], script[type="module"], link[rel=import]')
 		.forEach((el) => el.remove());
 
-	// Serialize entire document (including DOCTYPE if present via outerHTML path).
+	// Serialize full document including DOCTYPE.
 	let content = '';
 	for (const node of document.childNodes) {
 		switch (node) {

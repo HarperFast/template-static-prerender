@@ -1,84 +1,126 @@
+/**
+ * @module Worker
+ *
+ * Defines the {@link RenderWorker}, the core scheduler responsible for executing
+ * rendering jobs using Puppeteer via {@link ManagedBrowser}.
+ *
+ * Responsibilities:
+ * - Manage lifecycle of one or more browser instances.
+ * - Pull jobs from a {@link JobQueue} and schedule them with concurrency limits.
+ * - Track job attempts and call a user-supplied renderer function.
+ * - Handle browser retirement when thresholds are exceeded or errors occur.
+ * - Invoke callbacks when job results are available.
+ *
+ * Integrates with:
+ * - {@link JobQueue} for job supply.
+ * - {@link ManagedBrowser} for browser/page management.
+ * - {@link RenderJob} for job metadata and attempt tracking.
+ * - {@link Renderer} (user-supplied function) for page rendering.
+ */
+
 import { JobQueue } from './JobQueue.js';
 import ManagedBrowser from './ManagedBrowser.js';
 import { LaunchOptions, Page, ProtocolError, TimeoutError } from 'puppeteer';
 import RenderJob from './RenderJob.js';
 import logger from './util/Logger.js';
 
+/**
+ * Renderer function signature used by {@link RenderWorker}.
+ * @callback Renderer
+ * @param {Page} page - Puppeteer page to render into.
+ * @param {RenderJob} job - The job being executed.
+ * @returns {Promise<string|undefined>} Rendered content, if any.
+ */
 export type Renderer = (page: Page, job: RenderJob) => Promise<string | undefined>;
 
+// Timestamp of last non-priority job start (used for pacing).
 let lastNormalJobStartedAt = 0;
 
+/**
+ * Configuration for creating a {@link RenderWorker}.
+ */
 type RenderWorkerConfig = {
-	// The max number of concurrent page renders
+	/** Maximum number of concurrent page renders. Default: 5. */
 	maxConcurrency?: number;
 
-	// The total number of pages that can be rendered by the browser before it is replaced
+	/** Maximum total pages opened before recycling the browser. Default: 5000. */
 	browserExpirationThreshold?: number;
 
-	// The renderer function that will be used to render pages
+	/** Application-provided function used to render a page. */
 	renderer: Renderer;
 
+	/** Requests per second rate limit. Default: 10. */
 	rps?: number;
 
-	/**
-	 * Options forwarded to `puppeteer.launch`. These are used whenever
-	 * a new {@link ManagedBrowser} instance is created.
-	 */
+	/** Options forwarded to Puppeteer `launch`. */
 	browserLaunchOptions?: LaunchOptions;
 
-	// Source of work items to render.
+	/** Job source to consume. */
 	jobQueue: JobQueue;
 
+	/** Optional callback invoked after each job finishes. */
 	onJobResult?: (job: RenderJob) => void;
 };
 
+/**
+ * Worker responsible for scheduling and executing render jobs.
+ *
+ * Features:
+ * - Pulls jobs from {@link JobQueue} at a controlled rate.
+ * - Uses {@link ManagedBrowser} to launch and retire browsers.
+ * - Supports priority jobs and concurrency throttling.
+ * - Emits statistics logs periodically for observability.
+ */
 export default class RenderWorker {
-	// Current scheduler state.
+	/** Current worker state. */
 	status: 'running' | 'stopped' = 'stopped';
 
-	// Maximum parallel renders allowed.
+	/** Maximum number of concurrent jobs allowed. */
 	maxConcurrency: number;
 
-	// Page-open count threshold for retiring the current browser.
+	/** Threshold for retiring a browser based on opened page count. */
 	browserExpirationThreshold: number;
 
-	// Milliseconds between scheduler ticks.
+	/** Delay (ms) between starting new jobs, derived from RPS. */
 	jobStartDelay: number;
 
-	// Application-provided render function.
+	/** Application-supplied renderer function. */
 	renderFn: Renderer;
 
-	// True while a new browser is being launched. Prevents duplicate launches.
+	/** True while a new browser is launching. */
 	isLaunchingBrowser = false;
 
-	// The active managed browser (or `null` if not yet launched / being relaunched).
+	/** Active browser instance. */
 	browser: ManagedBrowser | null = null;
 
-	// Browsers that are retired and pending close.
+	/** Browsers that have been retired but not yet closed. */
 	retiredBrowsers: Set<ManagedBrowser> = new Set();
 
-	// Source of jobs.
+	/** Source of jobs to process. */
 	jobQueue: JobQueue;
 
-	// Options for `puppeteer.launch`.
+	/** Puppeteer launch options. */
 	browserLaunchOptions?: LaunchOptions;
 
-	// Periodic cleanup timer for retired browsers.
+	/** Cleanup timer for retired browsers. */
 	private browserCleanupInterval: NodeJS.Timeout | null = null;
 
-	// Scheduler timer handle (setTimeout).
+	/** Scheduler timer for ticks. */
 	private jobStartInterval: NodeJS.Timeout | null = null;
 
-	// Callback invoked after each job attempt finishes.
+	/** Callback invoked after each job finishes. */
 	onJobResult: (job: RenderJob) => void;
 
-	// Current number of active render tasks.
+	/** Number of currently active render tasks. */
 	activeRenders: number = 0;
 
+	/** Periodic statistics logging timer. */
 	logStatsInterval: NodeJS.Timeout;
 
+	/** Target requests per second. */
 	rps = 10;
 
+	/** Tick frequency (subdivides `jobStartDelay`). */
 	tickRate: number;
 
 	constructor(config: RenderWorkerConfig) {
@@ -95,16 +137,20 @@ export default class RenderWorker {
 		}, 10000);
 		this.browserCleanupInterval.unref();
 
+		// Periodically log worker stats.
 		this.logStatsInterval = setInterval(() => {
 			this.logStats();
 		}, 45000);
 
+		// Configure rate limiting.
 		if (config.rps) {
 			this.rps = config.rps;
 		}
+
 		this.jobStartDelay = Math.floor(1000 / this.rps);
 		this.tickRate = Math.max(Math.floor(this.jobStartDelay / 5), 1);
 
+		// Safety: exit on uncaught exceptions.
 		process.on('uncaughtException', (err: any) => {
 			logger.error({ err }, 'Uncaught Exception');
 			this.destroy();
@@ -112,16 +158,20 @@ export default class RenderWorker {
 		});
 	}
 
+	/**
+	 * Internal scheduler tick.
+	 * Starts the next job and schedules the next tick.
+	 */
 	tick = () => {
-		if (this.status === 'stopped') {
-			return;
-		}
-
+		if (this.status === 'stopped') return;
 		this.startNextJob();
-
 		this.jobStartInterval = setTimeout(this.tick, this.jobStartDelay);
 	};
 
+	/**
+	 * Start the worker loop.
+	 * Begins fetching jobs and rendering them.
+	 */
 	start() {
 		if (this.status === 'running') return;
 		this.logStats();
@@ -129,7 +179,10 @@ export default class RenderWorker {
 		this.tick();
 	}
 
-	pause(_caller: string) {
+	/**
+	 * Pause the worker loop.
+	 */
+	pause() {
 		if (this.jobStartInterval !== null) {
 			this.status = 'stopped';
 			this.logStats();
@@ -138,6 +191,9 @@ export default class RenderWorker {
 		}
 	}
 
+	/**
+	 * Log worker state, queue sizes, active renders, and browser stats.
+	 */
 	logStats() {
 		const numQueued = this.jobQueue._priorityQueue.size() + this.jobQueue._normalQueue.size();
 
@@ -160,8 +216,12 @@ export default class RenderWorker {
 		});
 	}
 
+	/**
+	 * Launch a new browser via {@link ManagedBrowser}.
+	 * Retires the current browser if applicable.
+	 */
 	async launchBrowser() {
-		this.pause('launchBrowser');
+		this.pause();
 		this.isLaunchingBrowser = true;
 		logger.info({
 			event: 'launching browser',
@@ -190,6 +250,10 @@ export default class RenderWorker {
 		}
 	}
 
+	/**
+	 * Destroy the worker.
+	 * Clears timers and closes all browsers (ignores close errors).
+	 */
 	destroy() {
 		if (this.browserCleanupInterval !== null) {
 			clearInterval(this.browserCleanupInterval);
@@ -202,7 +266,6 @@ export default class RenderWorker {
 			this.jobStartInterval = null;
 		}
 
-		// Close all browsers (ignore close errors).
 		if (this.browser) {
 			this.browser.close().catch(() => {});
 		}
@@ -214,6 +277,9 @@ export default class RenderWorker {
 		this.retiredBrowsers.clear();
 	}
 
+	/**
+	 * Close retired browsers that no longer have active work.
+	 */
 	closeRetiredBrowsers() {
 		for (const browser of this.retiredBrowsers) {
 			if (browser.activePages === 0 || browser.jobRefs === 0) {
@@ -224,6 +290,10 @@ export default class RenderWorker {
 		}
 	}
 
+	/**
+	 * Mark a browser as retired and schedule replacement.
+	 * @param {ManagedBrowser} browser - Browser to retire.
+	 */
 	retireBrowser(browser: ManagedBrowser) {
 		if (this.retiredBrowsers.has(browser)) {
 			return;
@@ -236,6 +306,13 @@ export default class RenderWorker {
 		}
 	}
 
+	/**
+	 * Render a single job using the provided browser and renderer.
+	 * Handles errors, retires browsers on fatal errors, and records results.
+	 *
+	 * @param {ManagedBrowser} browser - Browser to use.
+	 * @param {RenderJob} job - Job to render.
+	 */
 	async render(browser: ManagedBrowser, job: RenderJob) {
 		this.activeRenders++;
 		browser.jobRefs++;
@@ -280,6 +357,11 @@ export default class RenderWorker {
 		this.activeRenders--;
 	}
 
+	/**
+	 * Retrieve a browser suitable for new jobs.
+	 * - Launches a new one if none exist.
+	 * - Returns `null` if no free slots are available.
+	 */
 	getBrowser() {
 		if (this.browser === null) {
 			if (!this.isLaunchingBrowser) {
@@ -293,6 +375,10 @@ export default class RenderWorker {
 		return null;
 	}
 
+	/**
+	 * Attempt to start the next job.
+	 * Respects concurrency limits, priorities, and available browsers.
+	 */
 	startNextJob() {
 		if (this.activeRenders >= this.maxConcurrency) {
 			return;
@@ -303,6 +389,7 @@ export default class RenderWorker {
 		if (browser) {
 			const peekedJob = this.jobQueue.peek();
 
+			// Throttle normal jobs if one just started.
 			if (peekedJob && peekedJob.priority > 0 && Date.now() - lastNormalJobStartedAt < this.jobStartDelay) {
 				return;
 			}
@@ -315,13 +402,13 @@ export default class RenderWorker {
 				}
 				this.render(browser, job);
 			} else {
-				this.pause('startNextJob');
+				this.pause();
 				this.jobQueue.once('jobs', () => {
 					this.start();
 				});
 			}
 		} else {
-			this.pause('startNextJob');
+			this.pause();
 
 			if (this.browser && this.browser.freeSlots === 0) {
 				this.browser.once('open-slot', () => {

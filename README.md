@@ -1,58 +1,70 @@
 # Static Prerender Template
 
-This template project consists of the Harper component in `component` and the rendering service in `renderer`. Additional details for each can be found in their corresponding `README.md` files.
+This repository provides a complete template for deploying a static prerendering system built on **Harper** and a **headless rendering service**. It is designed for SEO optimization and consistent static snapshots of dynamic web applications.
+
+The project consists of two main modules:
+
+- **Component (`component/`)**
+  The Harper-based caching layer that stores and serves prerendered content.
+  It also orchestrates rendering jobs, manages job queues, schedules refreshes, and coordinates with rendering workers.
+
+- **Renderer (`renderer/`)**
+  A headless browser service (default: Puppeteer) that generates static HTML snapshots of dynamic pages.
+  The renderer processes jobs from the Harper component and pushes results back into the cache.
+
+Each module has its own `README.md` with deeper technical details.
+
+---
 
 ## Architecture Overview
 
-The system operates with two main components:
+The system operates in two cooperating layers:
 
-- **Component**: Harper caching layer that stores and serves prerendered content, also acts as the pub/sub orchestator for managing render jobs with the `renderer`
-- **Renderer**: Headless browser service that generates static HTML from dynamic web pages and returns content to the Harper `component`
+1. **Component Layer (Harper)**
+   - Serves prerendered pages from cache.
+   - Coordinates rendering jobs across workers using pub/sub.
+   - Schedules periodic refreshes of cached pages.
+   - Provides APIs for sitemap ingestion and page cache management.
+
+2. **Renderer Layer (Headless Service)**
+   - Executes jobs sent from Harper.
+   - Launches headless browsers, emulates devices, and extracts static HTML.
+   - Returns gzip-compressed prerendered results.
+   - Reports status and updates job queues over HTTP + MQTT.
+
+This separation of **orchestration** and **rendering** ensures flexibility: Harper manages caching and scheduling, while the renderer can be swapped out (Puppeteer, Playwright, Rendertron, etc.).
+
+---
 
 ## Render Service Options
 
 ### Default: Puppeteer (Included)
 
-This project includes a Puppeteer-based render service that uses Chrome in headless mode to generate static HTML snapshots of web pages.
+The repository ships with a Puppeteer-based renderer. It uses headless Chrome to capture dynamic pages as static HTML.
 
-**Why Puppeteer was selected:**
+**Why Puppeteer?**
 
-- **Performance**: Fast startup times (~50-100ms) and efficient memory usage
-- **JavaScript Support**: Full ES6+ and modern web API compatibility
-- **Reliability**: Stable Chrome DevTools Protocol with excellent error handling
-- **Resource Control**: Fine-grained control over network requests, cookies, and viewport settings
-- **Ecosystem**: Large community, extensive documentation, and active maintenance
-- **Docker Compatibility**: Well-supported containerization with official Chrome images
+- **Performance**: Fast startup and efficient memory usage.
+- **Modern Web Support**: Handles ES6+, Web Components, and CSS shims.
+- **Reliability**: Stable Chrome DevTools Protocol implementation.
+- **Resource Control**: Request interception, headers, device emulation.
+- **Docker-Ready**: Works smoothly with Chrome container images.
 
-### Bring Your Own Render Service
+### Bring Your Own Renderer
 
-The system supports custom render services through a standardized interface. Alternative rendering solutions can be integrated by implementing the required endpoints and response formats.
+The system supports alternative render services via a standard interface.
+Any renderer can be integrated by implementing required endpoints and data exchange formats.
 
-#### Alternative Render Technologies
+**Alternative Rendering Technologies**
 
-**Playwright**
+- **Playwright** – Multi-browser, modern automation, good for cross-browser tests.
+- **Chrome DevTools Protocol** – Direct low-level control, optimized for performance.
+- **Selenium WebDriver** – Legacy compatibility, slower, higher resource usage.
+- **Rendertron / Prerender.io** – Managed or hosted services, minimal maintenance.
 
-- **Pros**: Multi-browser support (Chrome, Firefox, Safari), faster execution, built-in waiting strategies
-- **Cons**: Larger resource footprint, more complex setup
-- **Use Case**: When cross-browser compatibility testing is required
+See below for **integration requirements**.
 
-**Chrome DevTools API**
-
-- **Pros**: Direct protocol access, minimal overhead, maximum control
-- **Cons**: Lower-level implementation required, more complex error handling
-- **Use Case**: High-performance scenarios requiring custom browser automation
-
-**Selenium WebDriver**
-
-- **Pros**: Mature ecosystem, extensive browser support, familiar API
-- **Cons**: Slower execution, higher resource usage, deprecated architecture
-- **Use Case**: Legacy system integration or existing Selenium infrastructure
-
-**Prerender.io / Rendertron**
-
-- **Pros**: Managed service options, optimized for SEO, minimal maintenance
-- **Cons**: External dependency, potential latency, cost considerations
-- **Use Case**: When outsourcing render infrastructure is preferred
+---
 
 #### Integration Steps for Alternative Render Service
 
@@ -128,29 +140,15 @@ Your custom render service must establish MQTT connection for real-time messagin
 
 #### Connection Configuration
 
-- **Protocol:** `wss` (WebSocket Secure) in production, `mqtt` in development
-- **Port:** Uses `HDB_HTTP_PORT` for WSS, `HDB_MQTT_PORT` for MQTT
-- **Authentication:** HarperDB username and password
-- **Connection URL:** `{protocol}://{HDB_HOST}:{port}`
+- **Protocol:** `wss` (WebSocket Secure) in production, `ws` (WebSocket) in development
+- **Port:** Uses `HDB_MQTT_PORT`
+- **Authentication:** Harper username and password
+- **Connection URL:** `{protocol}://{HDB_HOST}:{HTTP_MQTT_PORT}`
 
 #### Required MQTT Topics
 
-**Job Failure Reporting**
-
-```javascript
-Topic: 'render_jobs/failures'
-Message: {
-  "id": "<job-id>",
-  "workerId": "<worker-id>",
-  "attempts": <number-of-attempts>
-}
-Options: { qos: 0, retain: false }
-```
-
-**Additional Topics (for monitoring)**
-
 - `queue_status/producer`: Job queue status updates ("empty" or "queued")
-- `render_jobs/job`: Individual job processing updates
+- `render_worker/<WORKER_ID>/queue`: Worker-specific job queue
 
 ### Integration Workflow
 
@@ -162,32 +160,38 @@ Options: { qos: 0, retain: false }
    - Process URLs with your rendering technology
    - Gzip compress rendered HTML content
    - Upload results via content endpoint
-5. **Error Handling**: Report job failures via MQTT failures topic
-6. **Monitoring**: Use MQTT topics to monitor queue status and job updates
+5. **Monitoring**: Use MQTT topics to monitor queue status and job updates
 
 ### Authentication
 
-All HTTP requests require Basic authentication using HarperDB credentials:
+All HTTP requests require Basic authentication using Harper credentials:
 
-```
+```http
 Authorization: Basic <base64(HDB_USER:HDB_PASS)>
 ```
 
 ### Protocol Selection
 
 - **Production**: HTTPS/WSS (`NODE_ENV=production`)
-- **Development**: HTTP/MQTT (default)
+- **Development**: HTTP/WS (default)
 
 ### Data Structures
 
 **RenderJob Object**
 
-- `id`: Unique job identifier
-- `url`: Target URL to render
-- `content`: Rendered HTML content (populated after processing)
-- `attempts`: Number of processing attempts
-- `status`: Job status
+```json
+{
+	"id": "123",
+	"url": "https://example.com",
+	"priority": 2,
+	"headers": { "accept-language": "en-US" },
+	"deviceType": "desktop",
+	"acceptLanguage": "en-US",
+	"attempts": 0,
+	"status": "pending"
+}
+```
 
 The cache component orchestrator handles job distribution, content storage, and retry logic, while the render service focuses solely on generating HTML content from URLs. This separation allows for flexible rendering technology choices while maintaining consistent caching behavior.
 
-The modular design allows teams to choose the rendering solution that best fits their infrastructure, performance requirements, and maintenance capabilities while maintaining consistent caching behavior through the HarperDB component.
+The modular design allows teams to choose the rendering solution that best fits their infrastructure, performance requirements, and maintenance capabilities while maintaining consistent caching behavior through the Harper component.

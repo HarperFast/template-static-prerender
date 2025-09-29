@@ -1,7 +1,7 @@
 import assert from 'node:assert';
 import { cpus } from 'node:os';
 import { PuppeteerLifeCycleEvent } from 'puppeteer';
-import logger from './util/Logger.js';
+import logger from './Logger.js';
 import { ErrorHandler } from './ErrorHandler.js';
 import dotenv from 'dotenv';
 
