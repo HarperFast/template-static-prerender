@@ -18,6 +18,7 @@ import { parseSitemap, indexSitemap } from '../util/sitemapper.js';
 import { calculateNextRefresh } from '../util/time.js';
 import { getPageNode } from '../util/replication.js';
 import ManagedPage from './ManagedPage.js';
+import JobQueue from './JobQueue.js';
 import CacheKey from '../util/CacheKey.js';
 
 /**
@@ -174,7 +175,7 @@ export default class Sitemap extends Resource {
 			databases.local.RenderJob.put({
 				id: crypto.randomUUID(),
 				url: site.loc,
-				status: 'ready',
+				status: JobQueue.STATUS_TYPES.pending,
 				attempts: 0,
 			});
 		}

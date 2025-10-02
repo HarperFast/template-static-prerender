@@ -57,9 +57,11 @@ server.http(
 	async (request, nextHandler) => {
 		if (request.method === 'GET' && request.url.startsWith(BOT_PATH_PREFIX)) {
 			request.handlerPath = 'p';
+			const requestHeaders = request.headers;
+			const acceptLanguage = requestHeaders.get('accept-language');
 
 			// Validate bot request secret key
-			if (request.headers.get(BOT_REQUEST_KEY_NAME) !== BOT_REQUEST_KEY) {
+			if (requestHeaders.get(BOT_REQUEST_KEY_NAME) !== BOT_REQUEST_KEY) {
 				return {
 					headers: new Headers(),
 					status: 401,
@@ -69,9 +71,23 @@ server.http(
 			// Extract query parameters
 			const queryString = request.url.slice(BOT_PATH_PREFIX.length);
 			const params = new URLSearchParams(queryString);
-			const url = normalizeUrl(params.get('url'));
-			const deviceType = sanitizeDeviceType(params.get('deviceType'));
-			const acceptLanguage = request.headers.get('accept-language');
+
+			let url;
+			if (params.has('url')) {
+				url = normalizeUrl(params.get('url'));
+			} else {
+				// Get values from request body as fallback
+				const hostname = requestHeaders.get('host');
+				const path = requestHeaders.get('path') || '';
+				url = `https://${hostname}${path}`;
+			}
+
+			let deviceType;
+			if (requestHeaders.has('x-device-type')) {
+				deviceType = sanitizeDeviceType(requestHeaders.get('x-device-type'));
+			} else {
+				deviceType = sanitizeDeviceType(params.get('deviceType'));
+			}
 
 			// Record analytics for bot request
 			server.recordAnalytics(true, 'accept_language', acceptLanguage, 'GET', deviceType);
@@ -105,7 +121,7 @@ server.http(
 						clearTimeout(timeout);
 
 						// Ensure blob content errors are logged and handled
-						if (page.content instanceof Blob || page.content instanceof FileBackedBlob) {
+						if (page.content instanceof Blob) {
 							page.content.on('error', (error) => {
 								logger.error('Blob error', error);
 								page.invalidate();

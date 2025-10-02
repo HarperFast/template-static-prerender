@@ -17,7 +17,8 @@
 
 import ManagedPage from './ManagedPage.js';
 import { render } from '../util/render.js';
-import { HEADERS_WHITELIST } from '../util/constants.js';
+import CacheKey from '../util/CacheKey.js';
+import { REQ_HEADERS_WHITELIST } from '../util/constants.js';
 
 const pageSource = {
 	/**
@@ -45,48 +46,54 @@ const pageSource = {
 		// Ensure the page is managed before rendering
 		const pageInfo = await ManagedPage.get(url, request);
 
-		if (!pageInfo) {
-			logger.warn(`Not a managed page: ${url}`);
-			return { statusCode: 404 };
-		}
+		if (pageInfo) {
+			// Forward only whitelisted headers
+			const incomingRequestHeaders = request.headers.asObject;
+			let forwardHeaders = {};
+			Object.keys(incomingRequestHeaders).forEach((h) => {
+				if (REQ_HEADERS_WHITELIST.includes(h.toLowerCase())) {
+					forwardHeaders[h] = incomingRequestHeaders[h];
+				}
+			});
 
-		// Forward only whitelisted headers
-		const incomingRequestHeaders = request.headers.asObject;
-		let forwardHeaders = {};
-		Object.keys(incomingRequestHeaders).forEach((h) => {
-			if (HEADERS_WHITELIST.includes(h.toLowerCase())) {
-				forwardHeaders[h] = incomingRequestHeaders[h];
+			// Trigger prerender
+			const result = await render({
+				url,
+				forwardHeaders,
+				deviceType,
+				acceptLanguage,
+				waitForResponse: true,
+				priority: 0,
+			});
+
+			const statusCode = result.statusCode;
+			let responseHeaders = result.headers || {};
+			let content;
+			if (statusCode === 200) {
+				content = await createBlob(result.stream);
+			} else {
+				// Don’t cache failures
+				context.noCacheStore = true;
+				request.originResponseData = result.stream;
 			}
-		});
 
-		// Trigger prerender
-		const result = await render({
-			url,
-			forwardHeaders,
-			deviceType,
-			acceptLanguage,
-			waitForResponse: true,
-			priority: 0,
-		});
+			if (content instanceof Blob) {
+				content.on('error', (err) => {
+					logger.error('Blob error', err);
+					page.invalidate();
+				});
+			}
 
-		const statusCode = result.statusCode;
-		let responseHeaders = JSON.parse(result.headers || '{}');
-		let content;
-		if (statusCode === 200) {
-			content = await createBlob(result.stream);
-		} else {
-			// Don’t cache failures
-			context.noCacheStore = true;
-			request.originResponseData = result.stream;
+			return {
+				cacheKey,
+				statusCode,
+				headers: JSON.stringify(responseHeaders),
+				deviceType,
+				acceptLanguage,
+				content,
+				lastRefreshed: Date.now(),
+			};
 		}
-
-		return {
-			cacheKey,
-			statusCode,
-			headers: JSON.stringify(responseHeaders),
-			content,
-			lastRefreshed: Date.now(),
-		};
 	},
 };
 
@@ -125,6 +132,53 @@ export default class PageCache extends databases.prerender.PageCache {
 	 */
 	allowStaleWhileRevalidate() {
 		return true;
+	}
+
+	/**
+	 * Retrieves cached page content with headers and status.
+	 * Sets gzip encoding by default.
+	 * @returns {Promise<object>} - Response with status, data, and headers.
+	 */
+	async get() {
+		if (!this.content) {
+			return {
+				status: this.statusCode || 404,
+				data: {
+					data: 'Page Not Found',
+					contentType: 'text/plain',
+				},
+			};
+		}
+
+		// Check for blob errors
+		if (this.content instanceof Blob) {
+			this.content.on('error', (err) => {
+				logger.error('Blob error', err);
+				this.invalidate();
+			});
+		}
+
+		let respHeaders = new Headers();
+		for (const [key, value] of Object.entries(JSON.parse(this.headers))) {
+			respHeaders.set(key, value);
+		}
+
+		if (!respHeaders.has('content-encoding')) {
+			respHeaders.set('content-encoding', 'gzip');
+		}
+
+		if (!respHeaders.has('content-type')) {
+			respHeaders.set('content-type', 'text/html; charset=utf-8');
+		}
+
+		return {
+			status: this.statusCode || 200,
+			data: {
+				data: this.content,
+				contentType: 'text/html; charset=utf-8',
+			},
+			headers: respHeaders,
+		};
 	}
 }
 

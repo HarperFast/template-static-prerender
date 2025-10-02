@@ -87,7 +87,7 @@ if (isMainThread) {
 	threads.onMessageByType('job_queue/status', ({ status }) => {
 		if (status !== currentStatus) {
 			currentStatus = status;
-			databases.local.queue_status.put('producer', { status });
+			databases.local.QueueStatus.put('producer', { status });
 		}
 	});
 
@@ -217,7 +217,12 @@ export async function handleContent(job, statusCode, contentStream) {
  * @returns {Promise<void>}
  */
 async function savePageContent(result) {
-	await databases.local.renderjob.patch(result.jobId, {
+	let blob;
+	if (result.stream !== null) {
+		blob = await createBlob(result.stream);
+	}
+
+	await databases.local.RenderJob.patch(result.jobId, {
 		status: result.statusCode >= 400 ? 'failed' : 'completed',
 		completedTime: Date.now(),
 		statusCode: result.statusCode,
@@ -233,14 +238,14 @@ async function savePageContent(result) {
 	if (cb) {
 		cb(null, result);
 	} else if (result.statusCode === 200) {
-		const blob = await createBlob(result.stream);
-		await databases.prerender.pagecache.put({
+		await databases.prerender.PageCache.put({
 			cacheKey,
 			url: result.url,
 			deviceType: result.deviceType,
 			acceptLanguage: result.acceptLanguage,
 			statusCode: 200,
 			content: blob,
+			lastRefreshed: Date.now(),
 		});
 	}
 

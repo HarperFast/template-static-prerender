@@ -26,6 +26,7 @@ import Mutex from '../util/Mutex.js';
 import { currentMinuteMs } from '../util/time.js';
 import { nodes } from '../util/replication.js';
 import { extractUpstreamResponseHeaderName } from '../util/headers.js';
+import { RES_HEADERS_WHITELIST } from '../util/constants.js';
 
 const mutex = await Mutex.init();
 
@@ -261,13 +262,12 @@ export default class JobQueue extends databases.local.RenderJob {
 	 * @returns {Promise<any>}
 	 */
 	static async post(q, dataPromise, ctx) {
+		const data = await dataPromise;
 		if (q.url === '/result') {
-			return this._handleContent(ctx);
+			return this._handleContent(ctx, data);
 		}
 
 		const workerId = ctx.headers.get('x-worker-id');
-		const data = await dataPromise;
-
 		switch (data.op) {
 			case 'register-worker':
 				return releaseWorkerJobs(workerId);
@@ -314,29 +314,34 @@ export default class JobQueue extends databases.local.RenderJob {
 	 * Persists prerendered content, manages redirects, and caches results.
 	 *
 	 * @param {object} ctx - Request context (headers contain job metadata).
-	 * @param {Promise<object>} dataPromise - Body data promise.
+	 * @param {object} dataObj - Body data.
 	 * @returns {Promise<{status: number, headers: object}>}
 	 */
-	static async _handleResult(ctx, dataPromise) {
+	static async _handleResult(ctx, dataObj) {
 		const jobId = parseInt(ctx.headers.get('x-job-id'));
 		const statusCode = parseInt(ctx.headers.get('x-origin-status') || '500');
 
 		const downstreamResponseHeaders = {};
-
 		ctx.headers.forEach((value, key) => {
 			const upstreamResponseHeader = extractUpstreamResponseHeaderName(key);
 			if (upstreamResponseHeader) {
 				downstreamResponseHeaders[upstreamResponseHeader] = value;
+			} else if (RES_HEADERS_WHITELIST.includes(key.toLowerCase())) {
+				downstreamResponseHeaders[key] = value;
+			}
+
+			if (key.toLowerCase() === 'content-type') {
+				downstreamResponseHeaders['content-type'] = 'text/html; charset=utf-8';
 			}
 		});
 
 		const job = await databases.local.RenderJob.primaryStore.get(jobId);
+		const result = { ...job };
 
-		let data = await dataPromise;
+		let data = dataObj;
 		if (data && data?.data) {
 			data = data?.data;
 		}
-		const result = { ...job };
 
 		if (ctx.headers.get('x-render-time')) {
 			const renderTime = parseInt(ctx.headers.get('x-render-time'));
@@ -348,7 +353,7 @@ export default class JobQueue extends databases.local.RenderJob {
 		if (redirectUrl) {
 			const redirectStatusCode = parseInt(ctx.headers.get('x-redirect-status') || '302');
 			if (job) {
-				result.headers = JSON.stringify({ location: redirectUrl });
+				result.headers = { location: redirectUrl };
 
 				await handleContent(result, redirectStatusCode, null);
 
@@ -363,12 +368,7 @@ export default class JobQueue extends databases.local.RenderJob {
 					await databases.prerender.PageCache.put({
 						cacheKey,
 						statusCode: 200,
-						headers: JSON.stringify({
-							'content-type': 'text/html; charset=utf-8',
-							'content-encoding': 'gzip',
-							'x-harper-rendered': '1',
-							'vary': 'Accept-Encoding, Accept-Language',
-						}),
+						headers: JSON.stringify(downstreamResponseHeaders),
 						content: await createBlob(data),
 						lastRefreshed: Date.now(),
 					});

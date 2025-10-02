@@ -1,4 +1,4 @@
-const HEADERS_WHITELIST = [
+const REQ_HEADERS_WHITELIST = [
 	'content-type',
 	'content-length',
 	'content-encoding',
@@ -11,6 +11,17 @@ const HEADERS_WHITELIST = [
 	'accept-language',
 	'accept-encoding',
 	'user-agent',
+];
+
+const RES_HEADERS_WHITELIST = [
+	'content-type',
+	'content-length',
+	'content-encoding',
+	'cache-control',
+	'last-modified',
+	'etag',
+	'vary',
+	'server-timing',
 ];
 
 const botRequestHeaderAllowlist = ['if-none-match', 'if-modified-since'];
@@ -26,6 +37,7 @@ export {
 	BOT_REQUEST_KEY,
 	BOT_PATH_PREFIX,
 	VALID_DEVICE_TYPES,
-	HEADERS_WHITELIST,
+	REQ_HEADERS_WHITELIST,
+	RES_HEADERS_WHITELIST,
 	botRequestHeaderAllowlist,
 };

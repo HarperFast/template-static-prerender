@@ -32,7 +32,7 @@ import path from 'path';
 import { KnownDevices, Page } from 'puppeteer';
 import RenderJob from '../RenderJob.js';
 import { Renderer } from '../Worker.js';
-import { GOTO_TIMEOUT, WAIT_FOR_EVENT } from './env.js';
+import { GOTO_TIMEOUT, WAIT_FOR_EVENT, USER_AGENT } from './env.js';
 
 /**
  * Default rendering pipeline function.
@@ -91,6 +91,7 @@ const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | 
 			break;
 		default:
 			setupPromises.push(
+				page.setUserAgent(USER_AGENT),
 				page.setViewport({
 					width: 1920,
 					height: 1080,
@@ -126,7 +127,7 @@ const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | 
 
 				req.continue({ headers });
 			} else if (req.resourceType() === 'image' || req.resourceType() === 'media' || req.resourceType() === 'font') {
-				// Block heavy resources.
+				// Block heavy resources, comment out to allow.
 				req.abort();
 			} else {
 				// For all other requests, continue without modification
@@ -174,6 +175,34 @@ const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | 
 		const statusCode = job.httpResponse.statusCode;
 
 		if (statusCode === 200 || statusCode === 202 || statusCode === 304) {
+			// Close/remove modals, overlays, dialogs (e.g. language selectors, cookie banners).
+			// Include classes/attributes for specific use case as needed.
+			await page.evaluate(() => {
+				const selectors = [
+					'.modal',
+					'.popup',
+					'.overlay',
+					'.dialog',
+					'[role="dialog"]',
+					'.cookie-banner',
+					'.consent-overlay',
+				];
+
+				selectors.forEach((sel) => {
+					document.querySelectorAll(sel).forEach((el) => {
+						// Prefer to simulate closing button click if available
+						// Update with button classes/attributes for specific use case as needed.
+						const closeBtn = el.querySelector('button[aria-label*="Close" i], button.close, .close-button');
+						if (closeBtn) {
+							(closeBtn as HTMLElement).click();
+						} else {
+							// Otherwise, just remove from DOM
+							el.remove();
+						}
+					});
+				});
+			});
+
 			// Extract sanitized HTML snapshot.
 			const { origin, pathname = '' } = URL.parse(page.url())!;
 			const content = await page.evaluate(postProcess, origin, path.dirname(pathname));

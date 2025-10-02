@@ -195,13 +195,13 @@ export default class RenderWorker {
 	 * Log worker state, queue sizes, active renders, and browser stats.
 	 */
 	logStats() {
-		const numQueued = this.jobQueue._priorityQueue.size() + this.jobQueue._normalQueue.size();
+		const numQueued = this.jobQueue._priorityQueue.length + this.jobQueue._normalQueue.length;
 
 		logger.info({
 			status: this.status,
 			totalQueued: numQueued,
-			normalQueueSize: this.jobQueue._normalQueue.size(),
-			priorityQueueSize: this.jobQueue._priorityQueue.size(),
+			normalQueueSize: this.jobQueue._normalQueue.length,
+			priorityQueueSize: this.jobQueue._priorityQueue.length,
 			activeRenders: this.activeRenders,
 			retiredBrowsers: this.retiredBrowsers.size,
 			launchingBrowser: this.isLaunchingBrowser,

@@ -35,7 +35,7 @@ const protocol = process.env.NODE_ENV === 'production' ? `https` : 'http';
  * Initially configured with one connection; resized during registration.
  * @type {Pool}
  */
-let pool = new Pool(`${protocol}://${STATE.HDB_HOST}`, { connections: 1 });
+let pool = new Pool(`${protocol}://${STATE.HDB_HOST}:${HDB_HTTP_PORT}`, { connections: CONCURRENCY });
 
 /**
  * Default configuration for outbound requests to Harper.
@@ -97,17 +97,12 @@ export const register = async (): Promise<void> => {
 		}),
 	});
 
-	if (!res.ok) {
-		await res.bytes();
-		throw new Error(res.statusText);
+	await res.bytes();
+	if (res.status && res.status != 204) {
+		throw new Error(`Failed to register worker ${WORKER_ID}: ${res.status} - ${res.statusText}`);
+	} else {
+		logger.info(`Worker ${WORKER_ID} registered successfully.`);
 	}
-
-	const data = await res.json();
-
-	// Update DB host and reset pool with concurrency setting
-	setHdbHost(data.host);
-	pool.destroy();
-	pool = new Pool(`${protocol}://${STATE.HDB_HOST}:${HDB_HTTP_PORT}`, { connections: CONCURRENCY });
 };
 
 /**
@@ -140,6 +135,9 @@ export const sendJobResult = async (job: RenderJob): Promise<void> => {
 
 	if (job.httpResponse) {
 		Object.entries(job.httpResponse.headers).forEach(([key, val]) => {
+			if (key === 'link') return; // skip link headers to avoid conflicts
+			if (!val || val.length === 0 || val === '' || typeof val !== 'string') return;
+
 			headers[`x-origin-header-${key.toLowerCase()}`] = val;
 		});
 		headers['x-origin-status'] = job.httpResponse.statusCode.toString();
@@ -150,19 +148,20 @@ export const sendJobResult = async (job: RenderJob): Promise<void> => {
 	if (job.content) {
 		const compressed = await pGzip(job.content, { level: 6 });
 		body = compressed;
-		headers['content-type'] = job.httpResponse!.headers['content-type'] || 'text/html; charset=utf-8';
+		headers['content-type'] = 'text/html; charset=utf-8';
+		headers['content-encoding'] = 'gzip';
+		headers['content-length'] = compressed.length.toString();
 	}
 
 	const res = await pool.request({
 		...BASE_CONFIG,
 		path: '/render_jobs/result',
 		body,
-		headers,
+		headers: headers,
 	});
 
-	if (res.statusCode && res.statusCode != 204) {
+	await res.body.bytes();
+	if (res.statusCode && res.statusCode != 201) {
 		throw new Error(`Failed to send job result for ${job.url}: ${res.statusCode}`);
-	} else {
-		await res.body.bytes();
 	}
 };

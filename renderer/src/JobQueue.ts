@@ -69,10 +69,10 @@ export class JobQueue extends EventEmitter {
 	_autoFetchThreshold: number;
 
 	/** Queue for high-priority jobs pushed directly to this worker. */
-	_priorityQueue: Denque<RenderJob> = new Denque();
+	_priorityQueue: Denque<RenderJob>;
 
 	/** Queue for normal jobs fetched from upstream. */
-	_normalQueue: Denque<RenderJob> = new Denque();
+	_normalQueue: Denque<RenderJob>;
 
 	/** Application-provided function to fetch new jobs. */
 	_fetchJobs: JobFetchFn;
@@ -111,7 +111,8 @@ export class JobQueue extends EventEmitter {
 	constructor({ capacity, fetchJobs, fetchThreshold }: JobQueueConfig) {
 		super();
 		this.capacity = capacity;
-		this._normalQueue = new Denque([], { capacity });
+		this._normalQueue = new Denque<RenderJob>([], { capacity });
+		this._priorityQueue = new Denque<RenderJob>([], { capacity });
 		this._fetchJobs = fetchJobs;
 		this._autoFetchThreshold = fetchThreshold ?? capacity / 2;
 
@@ -184,12 +185,12 @@ export class JobQueue extends EventEmitter {
 		this.isFetching = true;
 
 		try {
-			const prevEmptySlots = this._normalQueue.size();
-			const jobs = await this._fetchJobs(prevEmptySlots);
+			const emptySlots = this.capacity - this._normalQueue.length;
+			const jobs = await this._fetchJobs(emptySlots);
 
 			jobs.forEach((job) => this._normalQueue.push(new RenderJob(job)));
 
-			if (prevEmptySlots === this.capacity && jobs.length > 0) {
+			if (jobs.length > 0) {
 				this.emit('jobs');
 			}
 		} catch (err: any) {

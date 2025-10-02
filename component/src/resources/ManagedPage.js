@@ -20,7 +20,6 @@ export default class ManagedPage extends databases.prerender.PageMeta {
 	 * - `idle`: Page is inactive and will not be refreshed until triggered.
 	 * - `scheduled`: Page is scheduled for a future refresh.
 	 * - `refreshing`: Page is currently being rendered or updated.
-	 * @enum {string}
 	 */
 	static STATUS_TYPE = {
 		idle: 'idle',
