@@ -37,7 +37,10 @@ export { PageCache as page_cache, JobQueue as render_jobs, Sitemap as sitemaps }
 const normalizeUrl = (url) => {
 	const parsedUrl = new URL(url);
 	parsedUrl.searchParams.sort();
-	return parsedUrl.href;
+	let finalUrl = parsedUrl.href;
+	if (parsedUrl.href.endsWith('/')) finalUrl = finalUrl.slice(0, -1);
+	if (finalUrl.endsWith('?')) finalUrl = finalUrl.slice(0, -1);
+	return finalUrl;
 };
 
 /**
@@ -79,7 +82,7 @@ server.http(
 				// Get values from request body as fallback
 				const hostname = requestHeaders.get('host');
 				const path = requestHeaders.get('path') || '';
-				url = `https://${hostname}${path}`;
+				url = normalizeUrl(`https://${hostname}${path}`);
 			}
 
 			let deviceType;
@@ -98,118 +101,106 @@ server.http(
 			const responseHeaders = (request.responseHeaders = new Headers());
 
 			// Handle response asynchronously with timeout
-			return new Promise((resolve) => {
-				try {
-					let timedOut = false;
+			try {
+				let timedOut = false;
+				const timeout = setTimeout(() => {
+					timedOut = true;
+				}, 8000);
 
-					// Timeout guard (8 seconds)
-					const timeout = setTimeout(() => {
-						timedOut = true;
-						resolve({
-							headers: {
-								'retry-after': '10',
-								'cache-control': 'no-store',
-							},
-							status: 503,
+				// Lookup page in cache
+				const page = await databases.prerender.PageCache.get(cacheKey, request);
+
+				if (!timedOut) {
+					clearTimeout(timeout);
+
+					// Ensure blob content errors are logged and handled
+					if (page.content instanceof Blob) {
+						page.content.on('error', (error) => {
+							logger.error('Blob error', error);
+							page.invalidate();
 						});
-					}, 8000);
+					}
 
-					// Lookup page in cache
-					databases.prerender.PageCache.get(cacheKey, request)
-						.then((page) => {
-							if (timedOut) return;
-							clearTimeout(timeout);
+					// Apply headers from upstream if available
+					const upstreamHeaders = page.headers ? JSON.parse(page.headers) : {};
 
-							if (!page || page.statusCode === 404) {
-								return resolve({ headers: {}, status: 404 });
+					if (page.statusCode === 200) {
+						// Force HTML-specific response headers
+						upstreamHeaders['content-encoding'] = 'gzip';
+						upstreamHeaders['content-type'] = 'text/html; charset=utf-8';
+						upstreamHeaders['x-harper-rendered'] = '1';
+						upstreamHeaders['vary'] = 'Accept-Encoding, Accept-Language';
+					}
+
+					// Merge headers into response
+					for (const [key, value] of Object.entries(upstreamHeaders)) {
+						if (key === 'server-timing') {
+							responseHeaders.append(key, value);
+						} else {
+							responseHeaders.set(key, value);
+						}
+					}
+
+					// Handle non-200 responses directly
+					if (page.statusCode !== 200) {
+						return {
+							headers: responseHeaders,
+							status: page.statusCode,
+							wasCacheMiss: page.wasLoadedFromSource(),
+						};
+					}
+
+					// Retrieve body (cached or origin response)
+					let body = page.content || request.originResponseData;
+					if (body) {
+						const contentEncoding = responseHeaders.get('content-encoding') || null;
+
+						// Negotiate best encoding with client
+						const bestEncoding = getBestEncoding(
+							getAcceptedEncodings(request.headers.get('accept-encoding')),
+							contentEncoding
+						);
+
+						// Re-encode response if needed
+						if (bestEncoding !== contentEncoding) {
+							if (bestEncoding) {
+								responseHeaders.set('content-encoding', bestEncoding);
 							}
 
-							// Ensure blob content errors are logged and handled
-							if (page.content instanceof Blob) {
-								page.content.on('error', (error) => {
-									logger.error('Blob error', error);
-									page.invalidate();
-								});
+							if (body instanceof Blob) {
+								body = Readable.fromWeb(body.stream());
 							}
 
-							// Apply headers from upstream if available
-							const upstreamHeaders = page.headers ? JSON.parse(page.headers) : {};
+							body = reencode(body, contentEncoding, bestEncoding, false);
 
-							if (page.statusCode === 200) {
-								// Force HTML-specific response headers
-								upstreamHeaders['content-encoding'] = 'gzip';
-								upstreamHeaders['content-type'] = 'text/html; charset=utf-8';
-								upstreamHeaders['x-harper-rendered'] = '1';
-								upstreamHeaders['vary'] = 'Accept-Encoding, Accept-Language';
-							}
+							// Remove length header as content length may change
+							responseHeaders.delete('content-length');
+						}
+					}
 
-							// Merge headers into response
-							for (const [key, value] of Object.entries(upstreamHeaders)) {
-								if (key === 'server-timing') {
-									responseHeaders.append(key, value);
-								} else {
-									responseHeaders.set(key, value);
-								}
-							}
-
-							// Handle non-200 responses directly
-							if (page.statusCode !== 200) {
-								return resolve({
-									headers: responseHeaders,
-									status: page.statusCode,
-									wasCacheMiss: page.wasLoadedFromSource(),
-								});
-							}
-
-							// Retrieve body (cached or origin response)
-							let body = page.content || request.originResponseData;
-							if (body) {
-								const contentEncoding = responseHeaders.get('content-encoding') || null;
-
-								// Negotiate best encoding with client
-								const bestEncoding = getBestEncoding(
-									getAcceptedEncodings(request.headers.get('accept-encoding')),
-									contentEncoding
-								);
-
-								// Re-encode response if needed
-								if (bestEncoding !== contentEncoding) {
-									if (bestEncoding) {
-										responseHeaders.set('content-encoding', bestEncoding);
-									}
-
-									if (body instanceof Blob) {
-										body = Readable.fromWeb(body.stream());
-									}
-
-									body = reencode(body, contentEncoding, bestEncoding, false);
-
-									// Remove length header as content length may change
-									responseHeaders.delete('content-length');
-								}
-							}
-
-							resolve({
-								headers: responseHeaders,
-								status: page.statusCode,
-								body,
-								wasCacheMiss: page.wasLoadedFromSource(),
-							});
-						})
-						.catch((error) => {
-							logger.error(error);
-							resolve({ headers: {}, status: 500 });
-						});
-				} catch (error) {
-					logger.error(error);
-					resolve({
-						headers: {},
-						status: 500,
-					});
+					return {
+						headers: responseHeaders,
+						status: page.statusCode,
+						body,
+						wasCacheMiss: page.wasLoadedFromSource(),
+					};
+				} else {
+					return {
+						headers: {
+							'retry-after': '10',
+							'cache-control': 'no-store',
+						},
+						status: 503,
+					};
 				}
-			});
+			} catch (error) {
+				logger.error(error);
+				return {
+					headers: {},
+					status: 500,
+				};
+			}
 		}
-
 		return nextHandler(request);
 	},
 	{ runFirst: true }

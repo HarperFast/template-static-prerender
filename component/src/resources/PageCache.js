@@ -86,6 +86,7 @@ const pageSource = {
 
 			return {
 				cacheKey,
+				url,
 				statusCode,
 				headers: JSON.stringify(responseHeaders),
 				deviceType,
@@ -93,6 +94,8 @@ const pageSource = {
 				content,
 				lastRefreshed: Date.now(),
 			};
+		} else {
+			logger.warn(`Request for ${url}, not a managed page`);
 		}
 	},
 };
