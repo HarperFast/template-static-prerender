@@ -13,7 +13,7 @@
  */
 
 import mqtt from 'mqtt';
-import { STATE, HDB_MQTT_PORT, HDB_PASS, HDB_USER, WORKER_ID } from '../util/env.js';
+import { STATE, HDB_PASS, HDB_USER, WORKER_ID, HDB_HTTP_PORT } from '../util/env.js';
 
 /**
  * Selected protocol for MQTT connections.
@@ -53,7 +53,7 @@ export type JobProducerStatus = 'empty' | 'queued';
  *
  * @type {mqtt.MqttClient}
  */
-export const mqttClient = await mqtt.connectAsync(`${protocol}://${STATE.HDB_HOST}:${HDB_MQTT_PORT}`, {
+export const mqttClient = await mqtt.connectAsync(`${protocol}://${STATE.HDB_HOST}:${HDB_HTTP_PORT}`, {
 	clean: true,
 	clientId: WORKER_ID,
 	username: HDB_USER,

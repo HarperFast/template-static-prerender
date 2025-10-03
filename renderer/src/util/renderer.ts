@@ -33,6 +33,7 @@ import { KnownDevices, Page } from 'puppeteer';
 import RenderJob from '../RenderJob.js';
 import { Renderer } from '../Worker.js';
 import { GOTO_TIMEOUT, WAIT_FOR_EVENT, USER_AGENT } from './env.js';
+import logger from './Logger.js';
 
 /**
  * Default rendering pipeline function.
@@ -209,6 +210,8 @@ const renderer: Renderer = async (page: Page, job: RenderJob): Promise<string | 
 
 			return content;
 		}
+	} else {
+		throw new Error(`Render for ${url} aborted or failed, no response or content.`);
 	}
 };
 

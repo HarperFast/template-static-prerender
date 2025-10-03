@@ -51,6 +51,9 @@ type PageCache @table(database: "prerender") @sealed @export {
 	# Combination of {url|deviceType|language} to uniquely identify this page
 	cacheKey: String @primaryKey
 
+	# Absolute URL to prerender
+	url: String @indexed
+
 	# HTTP status code returned when the content was captured
 	statusCode: Int
 
@@ -59,6 +62,12 @@ type PageCache @table(database: "prerender") @sealed @export {
 
 	# Static HTML content
 	content: Blob
+
+	# Device type for this page (mobile, desktop, tablet)
+	deviceType: String
+
+	# Preferred language for this page
+	acceptLanguage: String
 
 	# Time of the last refresh in epoch milliseconds
 	lastRefreshed: Long

@@ -44,7 +44,6 @@ let pool = new Pool(`${protocol}://${STATE.HDB_HOST}:${HDB_HTTP_PORT}`, { connec
 const BASE_CONFIG = {
 	method: 'POST',
 	headers: {
-		'Content-Type': 'application/json',
 		'x-worker-id': WORKER_ID!,
 		'authorization': `Basic ${Buffer.from(`${HDB_USER}:${HDB_PASS}`).toString('base64')}`,
 	},
@@ -63,6 +62,7 @@ export const fetchJobs = async (limit: number): Promise<RenderJob[]> => {
 		...BASE_CONFIG,
 		headers: {
 			...BASE_CONFIG.headers,
+			'content-type': 'application/json',
 		},
 		path: '/render_jobs',
 		body: JSON.stringify({
@@ -91,6 +91,7 @@ export const register = async (): Promise<void> => {
 		...BASE_CONFIG,
 		headers: {
 			...BASE_CONFIG.headers,
+			'content-type': 'application/json',
 		},
 		body: JSON.stringify({
 			op: 'register-worker',
@@ -151,6 +152,9 @@ export const sendJobResult = async (job: RenderJob): Promise<void> => {
 		headers['content-type'] = 'text/html; charset=utf-8';
 		headers['content-encoding'] = 'gzip';
 		headers['content-length'] = compressed.length.toString();
+	} else {
+		logger.warn(`Job ${job.id} has no content to send.`);
+		headers['content-type'] = 'application/json';
 	}
 
 	const res = await pool.request({

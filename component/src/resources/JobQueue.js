@@ -262,12 +262,12 @@ export default class JobQueue extends databases.local.RenderJob {
 	 * @returns {Promise<any>}
 	 */
 	static async post(q, dataPromise, ctx) {
-		const data = await dataPromise;
 		if (q.url === '/result') {
-			return this._handleContent(ctx, data);
+			return this._handleContent(ctx, dataPromise);
 		}
 
 		const workerId = ctx.headers.get('x-worker-id');
+		const data = await dataPromise;
 		switch (data.op) {
 			case 'register-worker':
 				return releaseWorkerJobs(workerId);
@@ -314,10 +314,10 @@ export default class JobQueue extends databases.local.RenderJob {
 	 * Persists prerendered content, manages redirects, and caches results.
 	 *
 	 * @param {object} ctx - Request context (headers contain job metadata).
-	 * @param {object} dataObj - Body data.
+	 * @param {Promise<object>} dataPromise - Body data promise.
 	 * @returns {Promise<{status: number, headers: object}>}
 	 */
-	static async _handleResult(ctx, dataObj) {
+	static async _handleContent(ctx, dataPromise) {
 		const jobId = parseInt(ctx.headers.get('x-job-id'));
 		const statusCode = parseInt(ctx.headers.get('x-origin-status') || '500');
 
@@ -338,9 +338,14 @@ export default class JobQueue extends databases.local.RenderJob {
 		const job = await databases.local.RenderJob.primaryStore.get(jobId);
 		const result = { ...job };
 
-		let data = dataObj;
-		if (data && data?.data) {
-			data = data?.data;
+		let data = null;
+		if (dataPromise && statusCode !== 500) {
+			data = await dataPromise;
+			if (data?.data) {
+				data = data.data;
+			}
+		} else {
+			logger.info('No dataPromise or statusCode is 500, skipping data processing', { statusCode });
 		}
 
 		if (ctx.headers.get('x-render-time')) {
@@ -361,13 +366,16 @@ export default class JobQueue extends databases.local.RenderJob {
 					// also save redirect in cache
 					const cacheKey = CacheKey.serialize({
 						url: redirectUrl,
-						deviceType: job.deviceType,
-						acceptLanguage: job.acceptLanguage,
+						deviceType: result.deviceType,
+						acceptLanguage: result.acceptLanguage,
 					});
 
 					await databases.prerender.PageCache.put({
 						cacheKey,
+						url: redirectUrl,
 						statusCode: 200,
+						deviceType: result.deviceType,
+						acceptLanguage: result.acceptLanguage,
 						headers: JSON.stringify(downstreamResponseHeaders),
 						content: await createBlob(data),
 						lastRefreshed: Date.now(),
@@ -375,7 +383,7 @@ export default class JobQueue extends databases.local.RenderJob {
 				}
 			}
 		} else {
-			result.headers = JSON.stringify(downstreamResponseHeaders);
+			result.headers = downstreamResponseHeaders;
 			await handleContent(result, statusCode, data);
 		}
 

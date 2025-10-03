@@ -39,8 +39,8 @@ ENV PUPPETEER_CACHE_DIR=/home/renderer/.cache/puppeteer
 RUN npm run install-browser
 RUN chown -R renderer:renderer /home/renderer
 
-# Set the user for the below instructions (respected by RUN, CMD, ENTRYPOINT only)
-USER renderer
+# Switch user
+USER root
 
 # Configure default locale (important for chrome-headless-shell).
 ENV LANG=en_US.UTF-8
