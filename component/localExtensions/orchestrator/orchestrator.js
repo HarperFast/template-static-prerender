@@ -243,6 +243,7 @@ async function savePageContent(result) {
 			url: result.url,
 			deviceType: result.deviceType,
 			acceptLanguage: result.acceptLanguage,
+			headers: JSON.stringify(result.headers || {}),
 			statusCode: 200,
 			content: blob,
 			lastRefreshed: Date.now(),

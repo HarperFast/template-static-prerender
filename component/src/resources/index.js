@@ -61,7 +61,7 @@ server.http(
 			const acceptLanguage = requestHeaders.get('accept-language');
 
 			// Validate bot request secret key
-			if (requestHeaders.get(BOT_REQUEST_KEY_NAME) !== BOT_REQUEST_KEY) {
+			if (BOT_REQUEST_KEY_NAME && requestHeaders.get(BOT_REQUEST_KEY_NAME) !== BOT_REQUEST_KEY) {
 				return {
 					headers: new Headers(),
 					status: 401,
@@ -115,83 +115,91 @@ server.http(
 					}, 8000);
 
 					// Lookup page in cache
-					const page = databases.prerender.PageCache.get(cacheKey, request);
+					databases.prerender.PageCache.get(cacheKey, request)
+						.then((page) => {
+							if (timedOut) return;
+							clearTimeout(timeout);
 
-					if (!timedOut) {
-						clearTimeout(timeout);
-
-						// Ensure blob content errors are logged and handled
-						if (page.content instanceof Blob) {
-							page.content.on('error', (error) => {
-								logger.error('Blob error', error);
-								page.invalidate();
-							});
-						}
-
-						// Apply headers from upstream if available
-						const upstreamHeaders = page.headers ? JSON.parse(page.headers) : {};
-
-						if (page.statusCode === 200) {
-							// Force HTML-specific response headers
-							upstreamHeaders['content-encoding'] = 'gzip';
-							upstreamHeaders['content-type'] = 'text/html; charset=utf-8';
-							upstreamHeaders['x-harper-rendered'] = '1';
-							upstreamHeaders['vary'] = 'Accept-Encoding, Accept-Language';
-						}
-
-						// Merge headers into response
-						for (const [key, value] of Object.entries(upstreamHeaders)) {
-							if (key === 'server-timing') {
-								responseHeaders.append(key, value);
-							} else {
-								responseHeaders.set(key, value);
+							if (!page || page.statusCode === 404) {
+								return resolve({ headers: {}, status: 404 });
 							}
-						}
 
-						// Handle non-200 responses directly
-						if (page.statusCode !== 200) {
-							return resolve({
+							// Ensure blob content errors are logged and handled
+							if (page.content instanceof Blob) {
+								page.content.on('error', (error) => {
+									logger.error('Blob error', error);
+									page.invalidate();
+								});
+							}
+
+							// Apply headers from upstream if available
+							const upstreamHeaders = page.headers ? JSON.parse(page.headers) : {};
+
+							if (page.statusCode === 200) {
+								// Force HTML-specific response headers
+								upstreamHeaders['content-encoding'] = 'gzip';
+								upstreamHeaders['content-type'] = 'text/html; charset=utf-8';
+								upstreamHeaders['x-harper-rendered'] = '1';
+								upstreamHeaders['vary'] = 'Accept-Encoding, Accept-Language';
+							}
+
+							// Merge headers into response
+							for (const [key, value] of Object.entries(upstreamHeaders)) {
+								if (key === 'server-timing') {
+									responseHeaders.append(key, value);
+								} else {
+									responseHeaders.set(key, value);
+								}
+							}
+
+							// Handle non-200 responses directly
+							if (page.statusCode !== 200) {
+								return resolve({
+									headers: responseHeaders,
+									status: page.statusCode,
+									wasCacheMiss: page.wasLoadedFromSource(),
+								});
+							}
+
+							// Retrieve body (cached or origin response)
+							let body = page.content || request.originResponseData;
+							if (body) {
+								const contentEncoding = responseHeaders.get('content-encoding') || null;
+
+								// Negotiate best encoding with client
+								const bestEncoding = getBestEncoding(
+									getAcceptedEncodings(request.headers.get('accept-encoding')),
+									contentEncoding
+								);
+
+								// Re-encode response if needed
+								if (bestEncoding !== contentEncoding) {
+									if (bestEncoding) {
+										responseHeaders.set('content-encoding', bestEncoding);
+									}
+
+									if (body instanceof Blob) {
+										body = Readable.fromWeb(body.stream());
+									}
+
+									body = reencode(body, contentEncoding, bestEncoding, false);
+
+									// Remove length header as content length may change
+									responseHeaders.delete('content-length');
+								}
+							}
+
+							resolve({
 								headers: responseHeaders,
 								status: page.statusCode,
+								body,
 								wasCacheMiss: page.wasLoadedFromSource(),
 							});
-						}
-
-						// Retrieve body (cached or origin response)
-						let body = page.content || request.originResponseData;
-						if (body) {
-							const contentEncoding = responseHeaders.get('content-encoding') || null;
-
-							// Negotiate best encoding with client
-							const bestEncoding = getBestEncoding(
-								getAcceptedEncodings(request.headers.get('accept-encoding')),
-								contentEncoding
-							);
-
-							// Re-encode response if needed
-							if (bestEncoding !== contentEncoding) {
-								if (bestEncoding) {
-									responseHeaders.set('content-encoding', bestEncoding);
-								}
-
-								if (body instanceof Blob) {
-									body = Readable.fromWeb(body.stream());
-								}
-
-								body = reencode(body, contentEncoding, bestEncoding, false);
-
-								// Remove length header as content length may change
-								responseHeaders.delete('content-length');
-							}
-						}
-
-						resolve({
-							headers: responseHeaders,
-							status: page.statusCode,
-							body,
-							wasCacheMiss: page.wasLoadedFromSource(),
+						})
+						.catch((error) => {
+							logger.error(error);
+							resolve({ headers: {}, status: 500 });
 						});
-					}
 				} catch (error) {
 					logger.error(error);
 					resolve({
