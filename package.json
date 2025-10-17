@@ -1,0 +1,36 @@
+{
+    "name": "template-static-prerender",
+    "version": "0.0.1",
+    "license": "Apache-2.0",
+    "description": "A template repo for prerendering and caching static HTML pages",
+    "type": "module",
+    "homepage": "https://harper.fast",
+    "author": {
+        "name": "HarperDB, Inc.",
+        "email": "opensource@harperdb.io",
+        "url": "https://harper.fast"
+    },
+    "contributors": [],
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/HarperFast/template-static-prerender.git"
+    },
+    "bugs": {
+        "url": "https://github.com/HarperFast/template-static-prerender/issues",
+        "email": "opensource@harperdb.io"
+    },
+    "scripts": {
+        "lint": "eslint . --config eslint.config.mjs",
+        "format": "prettier --write .",
+        "test": "npx vitest run --config vitest.config.js"
+    },
+    "devDependencies": {
+        "@harperdb/code-guidelines": "^0.0.5",
+        "@vitest/coverage-v8": "^3.2.4",
+        "audit-ci": "^7.1.0",
+        "eslint": "^9.32.0",
+        "prettier": "^3.6.2",
+        "supertest": "^7.1.4",
+        "vitest": "^3.2.4"
+    }
+}
