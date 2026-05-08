@@ -17,15 +17,16 @@
  * - {@link CacheKey} for cache storage keys.
  */
 
+import { databases } from 'harper';
 import { parentPort } from 'node:worker_threads';
 import { handleContent, registerJobCompletionCallback } from 'orchestrator';
 import ManagedPage from './ManagedPage.js';
 import CacheKey from '../util/CacheKey.js';
-import RenderWorkers from '../RenderWorkers.js';
+import RenderWorkers from '../util/RenderWorkers.js';
 import Mutex from '../util/Mutex.js';
 import { currentMinuteMs } from '../util/time.js';
 import { nodes } from '../util/replication.js';
-import { extractUpstreamResponseHeaderName } from '../util/headers.js';
+import { extractUpstreamResponseHeaderName } from '../util/header.js';
 import { RES_HEADERS_WHITELIST } from '../util/constants.js';
 
 const mutex = await Mutex.init();
@@ -108,7 +109,7 @@ export const assignNodeToWorker = mutex.withLock(async (workerId) => {
 		result = await databases.prerender.WorkerAssignments.get(0);
 	}
 
-	const assignments = { ...result.assignments.toJSON() };
+	const assignments = { ...(result.assignments || {}) };
 
 	nodes.forEach((node) => {
 		if (!assignments[node]) {
@@ -149,9 +150,7 @@ export const assignNodeToWorker = mutex.withLock(async (workerId) => {
 		workerNode = bestNode;
 	}
 
-	result.assignments = assignments;
-
-	await result.update();
+	await databases.prerender.WorkerAssignments.patch(0, { assignments });
 
 	return { host: workerNode };
 });

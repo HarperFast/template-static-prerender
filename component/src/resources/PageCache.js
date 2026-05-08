@@ -15,6 +15,7 @@
  * - {@link CacheKey} for uniquely identifying cached content.
  */
 
+import { databases } from 'harper';
 import ManagedPage from './ManagedPage.js';
 import { render } from '../util/render.js';
 import CacheKey from '../util/CacheKey.js';

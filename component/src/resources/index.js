@@ -12,6 +12,7 @@
  * performing cache lookups, validation, and content encoding negotiation.
  */
 
+import { databases } from 'harper';
 import { Readable } from 'stream';
 import JobQueue from './JobQueue.js';
 import Sitemap from './Sitemap.js';
@@ -117,7 +118,7 @@ server.http(
 					if (page.content instanceof Blob) {
 						page.content.on('error', (error) => {
 							logger.error('Blob error', error);
-							page.invalidate();
+							databases.prerender.PageCache.delete(page.cacheKey);
 						});
 					}
 
@@ -146,7 +147,6 @@ server.http(
 						return {
 							headers: responseHeaders,
 							status: page.statusCode,
-							wasCacheMiss: page.wasLoadedFromSource(),
 						};
 					}
 
@@ -182,7 +182,6 @@ server.http(
 						headers: responseHeaders,
 						status: page.statusCode,
 						body,
-						wasCacheMiss: page.wasLoadedFromSource(),
 					};
 				} else {
 					return {

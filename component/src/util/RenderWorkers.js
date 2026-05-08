@@ -12,6 +12,7 @@
  * notify other threads.
  */
 
+import { databases } from 'harper';
 import { parentPort } from 'worker_threads';
 
 /**

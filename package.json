@@ -32,5 +32,8 @@
         "prettier": "^3.6.2",
         "supertest": "^7.1.4",
         "vitest": "^3.2.4"
+    },
+    "dependencies": {
+        "harper": "^5.0.11"
     }
 }

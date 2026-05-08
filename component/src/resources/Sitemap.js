@@ -14,6 +14,7 @@
  * {@link CacheKey}, and {@link ManagedPage}.
  */
 
+import { databases } from 'harper';
 import { parseSitemap, indexSitemap } from '../util/sitemapper.js';
 import { calculateNextRefresh } from '../util/time.js';
 import { getPageNode } from '../util/replication.js';
