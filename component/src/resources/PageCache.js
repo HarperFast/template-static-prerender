@@ -141,12 +141,14 @@ export default class PageCache extends databases.prerender.PageCache {
 	/**
 	 * Retrieves cached page content with headers and status.
 	 * Sets gzip encoding by default.
+	 * @param {object} target - The resource target (URLSearchParams + record properties).
+	 * @param {object} context - Request context.
 	 * @returns {Promise<object>} - Response with status, data, and headers.
 	 */
-	async get() {
-		if (!this.content) {
+	static async get(target, context) {
+		if (!target.content) {
 			return {
-				status: this.statusCode || 404,
+				status: target.statusCode || 404,
 				data: {
 					data: 'Page Not Found',
 					contentType: 'text/plain',
@@ -155,15 +157,15 @@ export default class PageCache extends databases.prerender.PageCache {
 		}
 
 		// Check for blob errors
-		if (this.content instanceof Blob) {
-			this.content.on('error', (err) => {
+		if (target.content instanceof Blob) {
+			target.content.on('error', (err) => {
 				logger.error('Blob error', err);
-				this.invalidate();
+				target.invalidate();
 			});
 		}
 
 		let respHeaders = new Headers();
-		for (const [key, value] of Object.entries(JSON.parse(this.headers))) {
+		for (const [key, value] of Object.entries(JSON.parse(target.headers))) {
 			respHeaders.set(key, value);
 		}
 
@@ -176,9 +178,9 @@ export default class PageCache extends databases.prerender.PageCache {
 		}
 
 		return {
-			status: this.statusCode || 200,
+			status: target.statusCode || 200,
 			data: {
-				data: this.content,
+				data: target.content,
 				contentType: 'text/html; charset=utf-8',
 			},
 			headers: respHeaders,
