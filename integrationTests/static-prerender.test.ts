@@ -253,7 +253,10 @@ void suite('PageCache caching contract', (ctx: ContextWithHarper) => {
 				url: 'https://example.com/cached-page',
 				statusCode,
 				deviceType: 'desktop',
-				headers: JSON.stringify({ 'content-type': 'text/html; charset=utf-8' }),
+				// Use identity content-encoding so the plain-string content is not
+				// misinterpreted as gzip by the fetch() client (PageCache.static get()
+				// always adds content-encoding:gzip when absent, but not when present).
+				headers: JSON.stringify({ 'content-type': 'text/html; charset=utf-8', 'content-encoding': 'identity' }),
 				content,
 				lastRefreshed: Date.now(),
 			}),
