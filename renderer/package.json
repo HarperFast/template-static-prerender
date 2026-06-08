@@ -5,7 +5,7 @@
   "description": "Puppeteer headless browser service renderer for prerendering static HTML pages",
   "type": "module",
   "author": {
-    "name": "HarperDB, Inc.",
+    "name": "Harper, Inc.",
     "email": "opensource@harperdb.io",
     "url": "https://harpersystems.dev/"
   },

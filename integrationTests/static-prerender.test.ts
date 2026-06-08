@@ -1,0 +1,295 @@
+/**
+ * Integration tests for the template-static-prerender Harper component.
+ *
+ * Verifies the sitemaps scheduling endpoint and database table endpoints
+ * (PageMeta, queue_status, PageCache, render_jobs), and the PageCache
+ * caching contract (cache HIT + ETag/304 conditional request + validator
+ * lifecycle on a `sourcedFrom` cache table).
+ *
+ * Tests that require actual headless-browser page rendering against external
+ * URLs are omitted — they cannot run in CI. The caching contract is exercised
+ * by priming the PageCache table via a write-through PUT (the same path
+ * JobQueue._handleContent uses to store a render result), which seeds the
+ * cache WITHOUT invoking the render source, then reading it back as a real
+ * cache HIT.
+ *
+ * The component is in the `component/` subdirectory — FIXTURE_PATH points
+ * there so the harness boots the correct Harper app.
+ */
+import { suite, test, before, after } from 'node:test';
+import { strictEqual, ok, notStrictEqual } from 'node:assert/strict';
+import {
+	startHarper,
+	teardownHarper,
+	type ContextWithHarper,
+	type StartHarperOptions,
+} from '@harperfast/integration-testing';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { cp, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, basename, dirname, resolve } from 'node:path';
+
+const require = createRequire(import.meta.url);
+
+// The component (Harper app) lives in component/, not the repo root.
+const FIXTURE_PATH = fileURLToPath(new URL('../component', import.meta.url));
+
+/**
+ * Harper's `exports` map only exposes ".", so the harness's default resolution
+ * of `harper/dist/bin/harper.js` throws ERR_PACKAGE_PATH_NOT_EXPORTED. Resolve
+ * the CLI from the exported package root and pass it explicitly as
+ * `harperBinPath` (a documented harness escape hatch). Confirmed required for
+ * harper 5.0.10 → 5.0.28 with @harperfast/integration-testing 0.3.1 → 0.4.0.
+ */
+const HARPER_BIN_PATH = resolve(dirname(require.resolve('harper')), 'bin/harper.js');
+
+const START_OPTIONS: StartHarperOptions = { harperBinPath: HARPER_BIN_PATH };
+
+/**
+ * Sets up Harper with the fixture, dereferencing symlinks so that
+ * locally-installed file: packages (the `orchestrator` localExtension, which
+ * npm installs as a symlink) resolve within the temp directory. This is
+ * required by Harper v5's module security model which rejects modules whose
+ * realpathSync() falls outside the component's allowed path.
+ */
+async function setupHarperWithFixture(
+	ctx: ContextWithHarper,
+	fixturePath: string,
+	options: StartHarperOptions = START_OPTIONS
+): Promise<void> {
+	const dataRootDirPrefix = join(
+		process.env.HARPER_INTEGRATION_TEST_INSTALL_PARENT_DIR || tmpdir(),
+		'harper-integration-test-'
+	);
+	const dataRootDir = await mkdtemp(dataRootDirPrefix);
+	await cp(fixturePath, join(dataRootDir, 'components', basename(fixturePath)), {
+		recursive: true,
+		dereference: true,
+	});
+	ctx.harper = { dataRootDir } as ContextWithHarper['harper'];
+	await startHarper(ctx, options);
+}
+
+function authFetch(
+	ctx: ContextWithHarper,
+	path: string,
+	init: RequestInit & { headers?: Record<string, string> } = {}
+): Promise<Response> {
+	const { headers = {}, ...rest } = init;
+	const creds = Buffer.from(`${ctx.harper.admin.username}:${ctx.harper.admin.password}`).toString('base64');
+	return fetch(`${ctx.harper.httpURL}${path}`, {
+		...rest,
+		headers: { Authorization: `Basic ${creds}`, ...headers },
+	});
+}
+
+void suite('sitemaps endpoint', (ctx: ContextWithHarper) => {
+	before(async () => {
+		await setupHarperWithFixture(ctx, FIXTURE_PATH);
+	});
+
+	after(async () => {
+		await teardownHarper(ctx);
+	});
+
+	void test('POST /sitemaps with direct URL list schedules refresh', async () => {
+		const res = await authFetch(ctx, '/sitemaps', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				sitemapURL: 'integration-test-list',
+				refreshInterval: 86400000,
+				isSitemap: false,
+				urlList: ['https://example.com/page1', 'https://example.com/page2'],
+				deviceTypes: ['desktop'],
+			}),
+		});
+		strictEqual(res.status, 200);
+	});
+
+	void test('POST /sitemaps without required fields returns error', async () => {
+		const res = await authFetch(ctx, '/sitemaps', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({}),
+		});
+		ok(res.status >= 400, `expected error status, got ${res.status}`);
+	});
+});
+
+void suite('queue_status endpoint', (ctx: ContextWithHarper) => {
+	before(async () => {
+		await setupHarperWithFixture(ctx, FIXTURE_PATH);
+	});
+
+	after(async () => {
+		await teardownHarper(ctx);
+	});
+
+	void test('GET /queue_status returns 200 with array', async () => {
+		const res = await authFetch(ctx, '/queue_status/');
+		strictEqual(res.status, 200);
+		const body = await res.json();
+		ok(Array.isArray(body), 'response should be an array');
+	});
+});
+
+void suite('render_jobs endpoint', (ctx: ContextWithHarper) => {
+	before(async () => {
+		await setupHarperWithFixture(ctx, FIXTURE_PATH);
+	});
+
+	after(async () => {
+		await teardownHarper(ctx);
+	});
+
+	void test('GET /render_jobs returns 200 with array', async () => {
+		const res = await authFetch(ctx, '/render_jobs/');
+		strictEqual(res.status, 200);
+		const body = await res.json();
+		ok(Array.isArray(body), 'response should be an array');
+	});
+});
+
+void suite('PageCache endpoint', (ctx: ContextWithHarper) => {
+	before(async () => {
+		await setupHarperWithFixture(ctx, FIXTURE_PATH);
+	});
+
+	after(async () => {
+		await teardownHarper(ctx);
+	});
+
+	void test('GET /PageCache returns 200 with array', async () => {
+		const res = await authFetch(ctx, '/PageCache/');
+		strictEqual(res.status, 200);
+		const body = await res.json();
+		ok(Array.isArray(body), 'response should be an array');
+	});
+});
+
+void suite('PageMeta endpoint', (ctx: ContextWithHarper) => {
+	before(async () => {
+		await setupHarperWithFixture(ctx, FIXTURE_PATH);
+	});
+
+	after(async () => {
+		await teardownHarper(ctx);
+	});
+
+	void test('GET /PageMeta returns 200 with array', async () => {
+		const res = await authFetch(ctx, '/PageMeta/');
+		strictEqual(res.status, 200);
+		const body = await res.json();
+		ok(Array.isArray(body), 'response should be an array');
+	});
+
+	void test('GET /PageMeta?url returns empty array for unknown URL', async () => {
+		const res = await authFetch(
+			ctx,
+			`/PageMeta?url=${encodeURIComponent('https://unknown-url-that-was-not-processed.example.com/')}`
+		);
+		strictEqual(res.status, 200);
+		const body = await res.json();
+		ok(Array.isArray(body), 'response should be an array');
+		strictEqual(body.length, 0);
+	});
+});
+
+/**
+ * Caching contract for the PageCache cache table.
+ *
+ * PageCache is `sourcedFrom(pageSource)`. A cold GET of an un-primed key would
+ * invoke the render source (headless browser → external URL) which is not
+ * available in CI, so we prime the cache table directly via a write-through PUT
+ * — exactly how JobQueue._handleContent stores a completed render — and then
+ * read it back as a genuine cache HIT (no source invocation).
+ *
+ * Per the v5 caching contract, cache validators (ETag/Last-Modified) become
+ * available on a HIT once the entry is committed to the cache table, not on the
+ * priming write. We therefore poll the entry until a validator appears, then
+ * assert a real 304 conditional response, and finally that updating the cached
+ * record changes the validator so the stale conditional request no longer 304s.
+ */
+void suite('PageCache caching contract', (ctx: ContextWithHarper) => {
+	before(async () => {
+		await setupHarperWithFixture(ctx, FIXTURE_PATH);
+	});
+
+	after(async () => {
+		await teardownHarper(ctx);
+	});
+
+	// PageCache.static get() requires a User-Agent (allowRead) and serves the
+	// stored HTML body; the cacheKey is `url|deviceType` (see CacheKey.serialize).
+	const CACHE_KEY = 'https://example.com/cached-page|desktop';
+	const ENCODED_KEY = encodeURIComponent(CACHE_KEY);
+	const BOT_HEADERS = { 'User-Agent': 'Googlebot/2.1 (+http://www.google.com/bot.html)' };
+
+	async function primePageCache(ctx: ContextWithHarper, content: string, statusCode = 200): Promise<void> {
+		const res = await authFetch(ctx, `/PageCache/${ENCODED_KEY}`, {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				cacheKey: CACHE_KEY,
+				url: 'https://example.com/cached-page',
+				statusCode,
+				deviceType: 'desktop',
+				headers: JSON.stringify({ 'content-type': 'text/html; charset=utf-8' }),
+				content,
+				lastRefreshed: Date.now(),
+			}),
+		});
+		ok(res.status >= 200 && res.status < 300, `priming PUT should succeed, got ${res.status}`);
+	}
+
+	void test('write-through PUT then GET serves a cache HIT with body', async () => {
+		await primePageCache(ctx, '<html><body>cached v1</body></html>');
+
+		const res = await authFetch(ctx, `/PageCache/${ENCODED_KEY}`, { headers: BOT_HEADERS });
+		strictEqual(res.status, 200);
+		const text = await res.text();
+		ok(text.includes('cached v1'), `expected cached body, got: ${text.slice(0, 200)}`);
+	});
+
+	void test('cached entry exposes an ETag and honors If-None-Match with 304', async () => {
+		await primePageCache(ctx, '<html><body>cached v2</body></html>');
+
+		// Poll until the entry is committed to the cache table and a validator
+		// (ETag) is present on the HIT — it is not guaranteed on the first read.
+		let etag: string | null = null;
+		for (let attempt = 0; attempt < 20 && !etag; attempt++) {
+			const res = await authFetch(ctx, `/PageCache/${ENCODED_KEY}`, { headers: BOT_HEADERS });
+			strictEqual(res.status, 200);
+			etag = res.headers.get('etag');
+			if (!etag) await new Promise((r) => setTimeout(r, 100));
+		}
+		ok(etag, 'cached PageCache entry should expose an ETag validator on a HIT');
+
+		// A conditional request with the matching validator must return 304.
+		const conditional = await authFetch(ctx, `/PageCache/${ENCODED_KEY}`, {
+			headers: { ...BOT_HEADERS, 'If-None-Match': etag },
+		});
+		strictEqual(conditional.status, 304, 'matching If-None-Match should yield 304 Not Modified');
+
+		// Updating the cached record must change the validator, so the stale
+		// conditional request no longer matches and the fresh body is served.
+		await primePageCache(ctx, '<html><body>cached v3 updated</body></html>');
+
+		let newEtag: string | null = null;
+		for (let attempt = 0; attempt < 20; attempt++) {
+			const res = await authFetch(ctx, `/PageCache/${ENCODED_KEY}`, {
+				headers: { ...BOT_HEADERS, 'If-None-Match': etag },
+			});
+			if (res.status === 200) {
+				newEtag = res.headers.get('etag');
+				const text = await res.text();
+				ok(text.includes('cached v3 updated'), 'updated cache should serve the new body');
+				break;
+			}
+			await new Promise((r) => setTimeout(r, 100));
+		}
+		notStrictEqual(newEtag, etag, 'updating the cached record should produce a new ETag validator');
+	});
+});
