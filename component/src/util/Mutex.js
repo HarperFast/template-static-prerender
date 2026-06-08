@@ -27,9 +27,23 @@ export default class Mutex {
 	 */
 	static init() {
 		return new Promise((resolve, _reject) => {
+			let resolved = false;
+
+			// Fall back to a thread-local shared buffer if the main thread does not
+			// respond within 5 s (e.g. orchestrator not available in single-node mode).
+			const fallbackTimer = setTimeout(() => {
+				if (!resolved) {
+					resolved = true;
+					logger.warn('Mutex: main thread did not respond with shared buffer; falling back to local SharedArrayBuffer');
+					resolve(new Mutex(new SharedArrayBuffer(4)));
+				}
+			}, 5000);
+
 			parentPort
 				.on('message', (msg) => {
-					if (msg?.type === 'render_jobs/worker/mutex-res') {
+					if (msg?.type === 'render_jobs/worker/mutex-res' && !resolved) {
+						resolved = true;
+						clearTimeout(fallbackTimer);
 						resolve(new Mutex(msg.sharedBuffer));
 					}
 				})

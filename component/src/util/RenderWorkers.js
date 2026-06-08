@@ -40,8 +40,8 @@ export default class RenderWorkers {
 			}
 		});
 
-		// Request the initial list of connected workers
-		parentPort.postMessage({ type: 'request_connected_render_worker_ids' });
+		// Request the initial list of connected workers (parentPort is null on main thread)
+		parentPort?.postMessage({ type: 'request_connected_render_worker_ids' });
 	}
 
 	/**
