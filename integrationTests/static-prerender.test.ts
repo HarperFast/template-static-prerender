@@ -29,6 +29,10 @@ import { createRequire } from 'node:module';
 import { cp, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 const require = createRequire(import.meta.url);
 
@@ -47,11 +51,18 @@ const HARPER_BIN_PATH = resolve(dirname(require.resolve('harper')), 'bin/harper.
 const START_OPTIONS: StartHarperOptions = { harperBinPath: HARPER_BIN_PATH };
 
 /**
- * Sets up Harper with the fixture, dereferencing symlinks so that
- * locally-installed file: packages (the `orchestrator` localExtension, which
- * npm installs as a symlink) resolve within the temp directory. This is
- * required by Harper v5's module security model which rejects modules whose
- * realpathSync() falls outside the component's allowed path.
+ * Sets up Harper with the fixture, running `npm install --ignore-scripts`
+ * in the copied component directory so that local `file:` dependencies
+ * (e.g. the `orchestrator` localExtension) are installed before Harper starts.
+ *
+ * Harper v5 does NOT run npm install when a component is pre-copied into the
+ * install directory — it only does so during a `deploy` operation. Without this
+ * step, `require('orchestrator')` in the component fails with
+ * `Cannot find module 'orchestrator'` and all endpoints return 500.
+ *
+ * We also pass `dereference: true` to the cp so that any existing symlinks
+ * (from a prior local npm install) are copied as real files, keeping all paths
+ * inside the temp directory and satisfying Harper v5's module security model.
  */
 async function setupHarperWithFixture(
 	ctx: ContextWithHarper,
@@ -63,9 +74,15 @@ async function setupHarperWithFixture(
 		'harper-integration-test-'
 	);
 	const dataRootDir = await mkdtemp(dataRootDirPrefix);
-	await cp(fixturePath, join(dataRootDir, 'components', basename(fixturePath)), {
+	const destPath = join(dataRootDir, 'components', basename(fixturePath));
+	await cp(fixturePath, destPath, {
 		recursive: true,
 		dereference: true,
+	});
+	// Install the component's npm dependencies (including the orchestrator
+	// file: localExtension) so they are available when Harper loads the app.
+	await execFileAsync('npm', ['install', '--ignore-scripts', '--no-fund', '--no-audit'], {
+		cwd: destPath,
 	});
 	ctx.harper = { dataRootDir } as ContextWithHarper['harper'];
 	await startHarper(ctx, options);
