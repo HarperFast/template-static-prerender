@@ -81,7 +81,8 @@ const pageSource = {
 			if (content instanceof Blob) {
 				content.on('error', (err) => {
 					logger.error('Blob error', err);
-					page.invalidate();
+					// Invalidate the cache entry via the table (v5: records are frozen plain objects)
+					databases.prerender.PageCache.invalidate(cacheKey);
 				});
 			}
 
@@ -157,26 +158,24 @@ export default class PageCache extends databases.prerender.PageCache {
 			};
 		}
 
-		// Check for blob errors
+		// Check for blob errors. In v5, records are frozen plain objects — use
+		// databases.prerender.PageCache.invalidate(key) instead of record.invalidate().
 		if (record.content instanceof Blob) {
 			record.content.on('error', (err) => {
 				logger.error('Blob error', err);
-				record.invalidate();
+				databases.prerender.PageCache.invalidate(record.cacheKey);
 			});
 		}
 
-		let respHeaders = new Headers();
-		for (const [key, value] of Object.entries(JSON.parse(record.headers))) {
-			respHeaders.set(key, value);
-		}
-
-		if (!respHeaders.has('content-encoding')) {
-			respHeaders.set('content-encoding', 'gzip');
-		}
-
-		if (!respHeaders.has('content-type')) {
-			respHeaders.set('content-type', 'text/html; charset=utf-8');
-		}
+		// Build response headers as a plain object — Harper v5's REST mergeHeaders
+		// cannot accept a Headers instance (causes 'Iterator value { is not an entry
+		// object' when it tries to construct Map from the non-standard iterator).
+		const storedHeaders = JSON.parse(record.headers) || {};
+		const respHeaders = {
+			'content-encoding': 'gzip',
+			'content-type': 'text/html; charset=utf-8',
+			...storedHeaders,
+		};
 
 		return {
 			status: record.statusCode || 200,

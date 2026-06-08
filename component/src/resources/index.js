@@ -118,7 +118,9 @@ server.http(
 					if (page.content instanceof Blob) {
 						page.content.on('error', (error) => {
 							logger.error('Blob error', error);
-							databases.prerender.PageCache.delete(page.cacheKey);
+							// Use invalidate() not delete() — on a sourcedFrom cache table,
+							// delete() delegates to the source (no delete method) and throws.
+							databases.prerender.PageCache.invalidate(page.cacheKey);
 						});
 					}
 
