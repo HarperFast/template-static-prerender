@@ -180,7 +180,7 @@ export default class Sitemap extends Resource {
 			databases.local.RenderJob.put({
 				id: crypto.randomUUID(),
 				url: site.loc,
-				status: JobQueue.STATUS_TYPES.pending,
+				status: JobQueue.STATUS_TYPE.pending,
 				attempts: 0,
 			});
 		}

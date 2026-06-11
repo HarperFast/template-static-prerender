@@ -74,7 +74,7 @@ server.mqtt.events.on('connected', (session) => {
 	if (workerId) {
 		logger.info(`Worker connected: ${workerId}`);
 		databases.local.RenderWorker.put(workerId, { id: workerId, status: 'connected' });
-		parentPort.postMessage({ type: 'worker/status', workerId, status: 'connected' });
+		parentPort?.postMessage({ type: 'worker/status', workerId, status: 'connected' });
 	}
 });
 
@@ -93,6 +93,6 @@ server.mqtt.events.on('disconnected', (session) => {
 	if (workerId) {
 		logger.info(`Worker disconnected: ${workerId}`);
 		databases.local.RenderWorker.put(workerId, { id: workerId, status: 'disconnected' });
-		parentPort.postMessage({ type: 'worker/status', workerId, status: 'disconnected' });
+		parentPort?.postMessage({ type: 'worker/status', workerId, status: 'disconnected' });
 	}
 });
