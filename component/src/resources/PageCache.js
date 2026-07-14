@@ -183,6 +183,13 @@ export default class PageCache extends databases.prerender.PageCache {
 
 		return {
 			status: record.statusCode || 200,
+			// Return headers as a plain Record<string, string> (NOT a WHATWG Headers
+			// instance, which v5's REST mergeHeaders rejects). Without content-encoding
+			// the gzipped Blob would be served uncompressed and render as garbled binary.
+			headers: {
+				'content-type': storedHeaders['content-type'] || 'text/html; charset=utf-8',
+				'content-encoding': storedHeaders['content-encoding'] || 'gzip',
+			},
 			data: {
 				data: record.content,
 				contentType: storedHeaders['content-type'] || 'text/html; charset=utf-8',

@@ -51,7 +51,11 @@ export default class Sitemap extends Resource {
 	 */
 	static async get(target, context) {
 		logger.info('Sitemap.get', target);
-		return databases.prerender.Sitemap.get(target.id ?? target);
+		// List request (GET /sitemaps): no record id present, so return all records
+		// via search() rather than passing the RequestTarget object as a DB key.
+		if (!target?.id) return databases.prerender.Sitemap.search();
+		// Single request (GET /sitemaps/:id): look up by primary key.
+		return databases.prerender.Sitemap.get(target.id);
 	}
 
 	/**

@@ -149,6 +149,10 @@ server.http(
 						return {
 							headers: responseHeaders,
 							status: page.statusCode,
+							// Preserve cache hit/miss server-timing. In v5 get() returns a
+							// resource instance exposing wasLoadedFromSource(); optional
+							// chaining keeps this safe if that ever changes.
+							wasCacheMiss: page.wasLoadedFromSource?.(),
 						};
 					}
 
@@ -184,6 +188,9 @@ server.http(
 						headers: responseHeaders,
 						status: page.statusCode,
 						body,
+						// Preserve cache hit/miss server-timing (v5 exposes
+						// wasLoadedFromSource() on the get() result).
+						wasCacheMiss: page.wasLoadedFromSource?.(),
 					};
 				} else {
 					return {

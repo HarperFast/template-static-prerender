@@ -26,31 +26,67 @@ export default class Mutex {
 	 * @returns {Promise<Mutex>} Resolves with a `Mutex` instance once the shared buffer is received.
 	 */
 	static init() {
-		return new Promise((resolve, _reject) => {
+		return new Promise((resolve) => {
 			let resolved = false;
+			let retryTimer;
+			let fallbackTimer;
 
-			// Fall back to a thread-local shared buffer if the main thread does not
-			// respond within 5 s (e.g. orchestrator not available in single-node mode).
-			const fallbackTimer = setTimeout(() => {
-				if (!resolved) {
-					resolved = true;
-					logger.warn('Mutex: main thread did not respond with shared buffer; falling back to local SharedArrayBuffer');
-					resolve(new Mutex(new SharedArrayBuffer(4)));
-				}
-			}, 5000);
+			// A thread-local SharedArrayBuffer only provides real mutual exclusion
+			// when there is a single worker thread. With multiple threads, each
+			// worker would allocate its own buffer, so the "lock" would be
+			// per-thread and workers could double-claim jobs/assign the same node.
+			const threadCount = server?.config?.threads?.count ?? 1;
+
+			const finish = (sharedBuffer) => {
+				if (resolved) return;
+				resolved = true;
+				clearInterval(retryTimer);
+				clearTimeout(fallbackTimer);
+				resolve(new Mutex(sharedBuffer));
+			};
 
 			parentPort
 				.on('message', (msg) => {
-					if (msg?.type === 'render_jobs/worker/mutex-res' && !resolved) {
-						resolved = true;
-						clearTimeout(fallbackTimer);
-						resolve(new Mutex(msg.sharedBuffer));
+					if (msg?.type === 'render_jobs/worker/mutex-res') {
+						finish(msg.sharedBuffer);
 					}
 				})
 				.unref();
 
-			// Request shared buffer from main thread
-			parentPort.postMessage({ type: 'render_jobs/worker/mutex-req' });
+			// Request the shared buffer from the orchestrator (main thread).
+			const requestSharedBuffer = () => parentPort.postMessage({ type: 'render_jobs/worker/mutex-req' });
+			requestSharedBuffer();
+
+			// The orchestrator dispatches messages by type with no buffering, so a
+			// request sent before it has registered its `mutex-req` handler is
+			// silently dropped. Re-request periodically to close that startup race
+			// so the worker reliably receives the real shared buffer. Unref'd so it
+			// never blocks process exit.
+			retryTimer = setInterval(requestSharedBuffer, 500);
+			retryTimer.unref();
+
+			// If the orchestrator still has not responded after 5 s, only fall back
+			// to a thread-local buffer when it is provably safe (a single worker
+			// thread). In a multi-threaded deployment we must NOT silently hand out
+			// an unshared buffer — that would be a broken lock — so we keep waiting
+			// (the retry timer continues) and log loudly. Unref'd so it never blocks
+			// process exit.
+			fallbackTimer = setTimeout(() => {
+				if (resolved) return;
+				if (threadCount <= 1) {
+					clearInterval(retryTimer);
+					logger.warn(
+						'Mutex: orchestrator did not provide a shared buffer within 5s; using a thread-local SharedArrayBuffer (safe: single worker thread)'
+					);
+					finish(new SharedArrayBuffer(4));
+				} else {
+					logger.error(
+						`Mutex: orchestrator has not provided a shared buffer after 5s in a ${threadCount}-thread deployment; ` +
+							'refusing to fall back to an unshared buffer (would break inter-thread mutual exclusion). Still waiting.'
+					);
+				}
+			}, 5000);
+			fallbackTimer.unref();
 		});
 	}
 
