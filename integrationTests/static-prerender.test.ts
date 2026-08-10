@@ -101,15 +101,23 @@ function authFetch(
 	});
 }
 
-void suite('sitemaps endpoint', (ctx: ContextWithHarper) => {
-	before(async () => {
-		await setupHarperWithFixture(ctx, FIXTURE_PATH);
-	});
+/**
+ * A single Harper instance is shared by every suite in this file. Booting per suite
+ * meant six fixture copies, six `npm install`s and six Harper boots per Node version
+ * in the CI matrix. The suites use distinct endpoints/cache keys, so they do not need
+ * isolation from one another.
+ */
+const ctx = {} as ContextWithHarper;
 
-	after(async () => {
-		await teardownHarper(ctx);
-	});
+before(async () => {
+	await setupHarperWithFixture(ctx, FIXTURE_PATH);
+});
 
+after(async () => {
+	await teardownHarper(ctx);
+});
+
+void suite('sitemaps endpoint', () => {
 	void test('POST /sitemaps with direct URL list schedules refresh', async () => {
 		const res = await authFetch(ctx, '/sitemaps', {
 			method: 'POST',
@@ -135,15 +143,7 @@ void suite('sitemaps endpoint', (ctx: ContextWithHarper) => {
 	});
 });
 
-void suite('queue_status endpoint', (ctx: ContextWithHarper) => {
-	before(async () => {
-		await setupHarperWithFixture(ctx, FIXTURE_PATH);
-	});
-
-	after(async () => {
-		await teardownHarper(ctx);
-	});
-
+void suite('queue_status endpoint', () => {
 	void test('GET /queue_status returns 200 with array', async () => {
 		const res = await authFetch(ctx, '/queue_status/');
 		strictEqual(res.status, 200);
@@ -152,15 +152,7 @@ void suite('queue_status endpoint', (ctx: ContextWithHarper) => {
 	});
 });
 
-void suite('render_jobs endpoint', (ctx: ContextWithHarper) => {
-	before(async () => {
-		await setupHarperWithFixture(ctx, FIXTURE_PATH);
-	});
-
-	after(async () => {
-		await teardownHarper(ctx);
-	});
-
+void suite('render_jobs endpoint', () => {
 	void test('GET /render_jobs returns 200 with array', async () => {
 		const res = await authFetch(ctx, '/render_jobs/');
 		strictEqual(res.status, 200);
@@ -169,15 +161,7 @@ void suite('render_jobs endpoint', (ctx: ContextWithHarper) => {
 	});
 });
 
-void suite('PageCache endpoint', (ctx: ContextWithHarper) => {
-	before(async () => {
-		await setupHarperWithFixture(ctx, FIXTURE_PATH);
-	});
-
-	after(async () => {
-		await teardownHarper(ctx);
-	});
-
+void suite('PageCache endpoint', () => {
 	void test('GET /PageCache returns 200 with array', async () => {
 		const res = await authFetch(ctx, '/PageCache/');
 		strictEqual(res.status, 200);
@@ -186,15 +170,7 @@ void suite('PageCache endpoint', (ctx: ContextWithHarper) => {
 	});
 });
 
-void suite('PageMeta endpoint', (ctx: ContextWithHarper) => {
-	before(async () => {
-		await setupHarperWithFixture(ctx, FIXTURE_PATH);
-	});
-
-	after(async () => {
-		await teardownHarper(ctx);
-	});
-
+void suite('PageMeta endpoint', () => {
 	void test('GET /PageMeta returns 200 with array', async () => {
 		const res = await authFetch(ctx, '/PageMeta/');
 		strictEqual(res.status, 200);
@@ -229,15 +205,7 @@ void suite('PageMeta endpoint', (ctx: ContextWithHarper) => {
  * creates the record (returning 2xx) rather than asserting GET body content,
  * to avoid this upstream regression. The bug is documented in the PR body.
  */
-void suite('PageCache caching contract', (ctx: ContextWithHarper) => {
-	before(async () => {
-		await setupHarperWithFixture(ctx, FIXTURE_PATH);
-	});
-
-	after(async () => {
-		await teardownHarper(ctx);
-	});
-
+void suite('PageCache caching contract', () => {
 	const CACHE_KEY = 'https://example.com/cached-page|desktop';
 	const ENCODED_KEY = encodeURIComponent(CACHE_KEY);
 

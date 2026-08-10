@@ -30,6 +30,7 @@ export default class Mutex {
 			let resolved = false;
 			let retryTimer;
 			let fallbackTimer;
+			let stallTimer;
 
 			// A thread-local SharedArrayBuffer only provides real mutual exclusion
 			// when there is a single worker thread. With multiple threads, each
@@ -42,6 +43,7 @@ export default class Mutex {
 				resolved = true;
 				clearInterval(retryTimer);
 				clearTimeout(fallbackTimer);
+				clearInterval(stallTimer);
 				resolve(new Mutex(sharedBuffer));
 			};
 
@@ -80,10 +82,17 @@ export default class Mutex {
 					);
 					finish(new SharedArrayBuffer(4));
 				} else {
-					logger.error(
-						`Mutex: orchestrator has not provided a shared buffer after 5s in a ${threadCount}-thread deployment; ` +
-							'refusing to fall back to an unshared buffer (would break inter-thread mutual exclusion). Still waiting.'
-					);
+					// Keep re-logging for as long as the mutex is unresolved. `retryTimer`
+					// polls silently, so a single line here could be missed or rotated out
+					// and the stuck state would be invisible to logs/alerting.
+					const logStalled = () =>
+						logger.error(
+							`Mutex: orchestrator has not provided a shared buffer after 5s in a ${threadCount}-thread deployment; ` +
+								'refusing to fall back to an unshared buffer (would break inter-thread mutual exclusion). Still waiting.'
+						);
+					logStalled();
+					stallTimer = setInterval(logStalled, 30000);
+					stallTimer.unref();
 				}
 			}, 5000);
 			fallbackTimer.unref();
