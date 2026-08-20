@@ -30,6 +30,8 @@ import { cp, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, basename, dirname, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -187,6 +189,83 @@ void suite('PageMeta endpoint', () => {
 		const body = await res.json();
 		ok(Array.isArray(body), 'response should be an array');
 		strictEqual(body.length, 0);
+	});
+});
+
+/**
+ * Indexing contract for PUT /sitemaps.
+ *
+ * `Sitemap.put()` fetches and parses a sitemap, persists it to
+ * `databases.prerender.Sitemap`, and enqueues one `databases.local.RenderJob` per
+ * discovered URL with `JobQueue.STATUS_TYPE.pending`. That constant is where the v5
+ * `STATUS_TYPES` -> `STATUS_TYPE` rename landed, so a regression would silently stop
+ * enqueuing work; nothing else in this file exercises that path.
+ *
+ * The sitemap is served from a throwaway HTTP server on 127.0.0.1 (port 0, so the OS
+ * picks a free one) rather than an external host, keeping the test hermetic in CI.
+ */
+void suite('sitemap indexing (PUT /sitemaps)', () => {
+	const SITEMAP_URLS = ['https://example.com/prerender-alpha', 'https://example.com/prerender-beta'];
+	const SITEMAP_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${SITEMAP_URLS.map((loc) => `\t<url><loc>${loc}</loc><lastmod>2026-01-01</lastmod></url>`).join('\n')}
+</urlset>`;
+
+	let server: Server;
+	let sitemapURL: string;
+
+	before(async () => {
+		server = createServer((_req, res) => {
+			res.writeHead(200, { 'Content-Type': 'application/xml' });
+			res.end(SITEMAP_XML);
+		});
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		sitemapURL = `http://127.0.0.1:${(server.address() as AddressInfo).port}/sitemap.xml`;
+	});
+
+	after(async () => {
+		await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+	});
+
+	void test('indexes the sitemap and enqueues a pending render job per URL', async () => {
+		const res = await authFetch(ctx, `/sitemaps?url=${encodeURIComponent(sitemapURL)}`, {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json' },
+			body: '{}',
+		});
+		strictEqual(res.status, 200);
+		const body = (await res.json()) as { added: number; errors: number };
+		strictEqual(body.added, SITEMAP_URLS.length, `expected every sitemap URL to be indexed, got ${JSON.stringify(body)}`);
+		strictEqual(body.errors, 0, `expected no indexing errors, got ${JSON.stringify(body)}`);
+
+		// The sitemap itself is persisted.
+		const sitemaps = (await (await authFetch(ctx, '/sitemaps')).json()) as Array<{ url: string }>;
+		ok(
+			sitemaps.some((entry) => entry.url === sitemapURL),
+			`expected the sitemap to be stored, got ${JSON.stringify(sitemaps)}`
+		);
+
+		// Sitemap.put() enqueues render jobs without awaiting each write, so poll until
+		// both are visible rather than reading once and racing the commit.
+		const deadline = Date.now() + 10_000;
+		let jobs: Array<{ url: string; status: string }> = [];
+		while (Date.now() < deadline) {
+			const listed = (await (await authFetch(ctx, '/render_job/')).json()) as Array<{ url: string; status: string }>;
+			jobs = listed.filter((job) => SITEMAP_URLS.includes(job.url));
+			if (jobs.length === SITEMAP_URLS.length) break;
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		strictEqual(
+			jobs.length,
+			SITEMAP_URLS.length,
+			`expected one render job per sitemap URL, got ${JSON.stringify(jobs)}`
+		);
+		for (const url of SITEMAP_URLS) {
+			const job = jobs.find((entry) => entry.url === url);
+			ok(job, `no render job enqueued for ${url}`);
+			strictEqual(job.status, 'pending', `render job for ${url} should be pending, got ${job.status}`);
+		}
 	});
 });
 
