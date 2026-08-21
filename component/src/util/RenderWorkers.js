@@ -12,6 +12,7 @@
  * notify other threads.
  */
 
+import { databases } from 'harper';
 import { parentPort } from 'worker_threads';
 
 /**
@@ -39,8 +40,8 @@ export default class RenderWorkers {
 			}
 		});
 
-		// Request the initial list of connected workers
-		parentPort.postMessage({ type: 'request_connected_render_worker_ids' });
+		// Request the initial list of connected workers (parentPort is null on main thread)
+		parentPort?.postMessage({ type: 'request_connected_render_worker_ids' });
 	}
 
 	/**
@@ -73,7 +74,7 @@ server.mqtt.events.on('connected', (session) => {
 	if (workerId) {
 		logger.info(`Worker connected: ${workerId}`);
 		databases.local.RenderWorker.put(workerId, { id: workerId, status: 'connected' });
-		parentPort.postMessage({ type: 'worker/status', workerId, status: 'connected' });
+		parentPort?.postMessage({ type: 'worker/status', workerId, status: 'connected' });
 	}
 });
 
@@ -92,6 +93,6 @@ server.mqtt.events.on('disconnected', (session) => {
 	if (workerId) {
 		logger.info(`Worker disconnected: ${workerId}`);
 		databases.local.RenderWorker.put(workerId, { id: workerId, status: 'disconnected' });
-		parentPort.postMessage({ type: 'worker/status', workerId, status: 'disconnected' });
+		parentPort?.postMessage({ type: 'worker/status', workerId, status: 'disconnected' });
 	}
 });

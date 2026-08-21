@@ -10,6 +10,7 @@
  * to the originating thread.
  */
 
+import { databases } from 'harper';
 import { isMainThread, threadId } from 'worker_threads';
 import { parentPort } from 'node:worker_threads';
 import CacheKey from '../../src/util/CacheKey.js';
@@ -254,16 +255,12 @@ async function savePageContent(result) {
 	const pageSchedule = await databases.prerender.PageMeta.get(cacheKey);
 
 	if (pageSchedule) {
-		pageSchedule.lastRefresh = Date.now();
-
-		if (pageSchedule.refreshInterval > -1) {
-			pageSchedule.nextRefresh = calculateNextRefresh(pageSchedule.refreshInterval, pageSchedule.lastRefresh);
-			pageSchedule.status = 'scheduled';
-		} else {
-			pageSchedule.nextRefresh = -1;
-			pageSchedule.status = 'idle';
-		}
-
-		await pageSchedule.update();
+		const lastRefresh = Date.now();
+		const isRecurring = pageSchedule.refreshInterval > -1;
+		await databases.prerender.PageMeta.patch(cacheKey, {
+			lastRefresh,
+			nextRefresh: isRecurring ? calculateNextRefresh(pageSchedule.refreshInterval, lastRefresh) : -1,
+			status: isRecurring ? 'scheduled' : 'idle',
+		});
 	}
 }

@@ -12,6 +12,7 @@
  * performing cache lookups, validation, and content encoding negotiation.
  */
 
+import { databases } from 'harper';
 import { Readable } from 'stream';
 import JobQueue from './JobQueue.js';
 import Sitemap from './Sitemap.js';
@@ -117,7 +118,9 @@ server.http(
 					if (page.content instanceof Blob) {
 						page.content.on('error', (error) => {
 							logger.error('Blob error', error);
-							page.invalidate();
+							// Use invalidate() not delete() — on a sourcedFrom cache table,
+							// delete() delegates to the source (no delete method) and throws.
+							databases.prerender.PageCache.invalidate(page.cacheKey);
 						});
 					}
 
@@ -146,7 +149,10 @@ server.http(
 						return {
 							headers: responseHeaders,
 							status: page.statusCode,
-							wasCacheMiss: page.wasLoadedFromSource(),
+							// Preserve cache hit/miss server-timing. In v5 get() returns a
+							// resource instance exposing wasLoadedFromSource(); optional
+							// chaining keeps this safe if that ever changes.
+							wasCacheMiss: page.wasLoadedFromSource?.(),
 						};
 					}
 
@@ -182,7 +188,9 @@ server.http(
 						headers: responseHeaders,
 						status: page.statusCode,
 						body,
-						wasCacheMiss: page.wasLoadedFromSource(),
+						// Preserve cache hit/miss server-timing (v5 exposes
+						// wasLoadedFromSource() on the get() result).
+						wasCacheMiss: page.wasLoadedFromSource?.(),
 					};
 				} else {
 					return {

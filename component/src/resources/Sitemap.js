@@ -14,6 +14,7 @@
  * {@link CacheKey}, and {@link ManagedPage}.
  */
 
+import { databases } from 'harper';
 import { parseSitemap, indexSitemap } from '../util/sitemapper.js';
 import { calculateNextRefresh } from '../util/time.js';
 import { getPageNode } from '../util/replication.js';
@@ -44,12 +45,17 @@ export default class Sitemap extends Resource {
 	/**
 	 * Retrieve sitemap metadata from the database.
 	 *
-	 * @param {string} query - Sitemap identifier (usually the URL).
+	 * @param {object} target - Resource target (URLSearchParams + record properties).
+	 * @param {object} context - Request context.
 	 * @returns {Promise<object>} Sitemap metadata.
 	 */
-	async get(query) {
-		logger.info('Sitemap.get', query);
-		return databases.prerender.Sitemap.get(query);
+	static async get(target, context) {
+		logger.info('Sitemap.get', target);
+		// List request (GET /sitemaps): no record id present, so return all records
+		// via search() rather than passing the RequestTarget object as a DB key.
+		if (!target?.id) return databases.prerender.Sitemap.search();
+		// Single request (GET /sitemaps/:id): look up by primary key.
+		return databases.prerender.Sitemap.get(target.id);
 	}
 
 	/**
@@ -77,16 +83,18 @@ export default class Sitemap extends Resource {
 	 * Creates or updates {@link ManagedPage} entries for each discovered URL,
 	 * schedules them for prerendering, and persists metadata in `PageMeta`.
 	 *
-	 * @param {object} options
-	 * @param {string} options.sitemapURL - Source sitemap URL (or unique string identifier for urlList).
-	 * @param {number} options.refreshInterval - Refresh interval (ms).
-	 * @param {boolean} options.isSitemap - Whether input is a sitemap XML, default is true.
-	 * @param {string[]} options.urlList - Direct list of URLs if not a sitemap, default is empty array.
-	 * @param {string[]} options.deviceTypes - Device types to generate cache keys for, default is ['desktop', 'mobile'].
+	 * @param {object} target - Resource target.
+	 * @param {Promise<object>} data - Request body (awaited internally).
+	 * @param {string} data.sitemapURL - Source sitemap URL (or unique string identifier for urlList).
+	 * @param {number} data.refreshInterval - Refresh interval (ms).
+	 * @param {boolean} data.isSitemap - Whether input is a sitemap XML, default is true.
+	 * @param {string[]} data.urlList - Direct list of URLs if not a sitemap, default is empty array.
+	 * @param {string[]} data.deviceTypes - Device types to generate cache keys for, default is ['desktop', 'mobile'].
+	 * @param {object} context - Request context.
 	 * @returns {Promise<{ added: number, errors: number }>}
 	 */
-	async post({ sitemapURL, refreshInterval, isSitemap = true, urlList = [], deviceTypes = ['desktop', 'mobile'] }) {
-		const context = this.getContext();
+	static async post(target, data, context) {
+		const { sitemapURL, refreshInterval, isSitemap = true, urlList = [], deviceTypes = ['desktop', 'mobile'] } = await data;
 		logger.info({ sitemapURL, refreshInterval });
 
 		let sites = [];
@@ -159,12 +167,13 @@ export default class Sitemap extends Resource {
 	 * {@link indexSitemap} to parse its contents. Each discovered URL
 	 * is added as a render job in `databases.local.RenderJob`.
 	 *
-	 * @param {object} query - Query object containing the sitemap URL.
-	 * @param {string} query.url - Sitemap URL to index.
+	 * @param {object} target - Resource target (URLSearchParams + record properties).
+	 * @param {Promise<object>} data - Request body.
+	 * @param {object} context - Request context.
 	 * @returns {Promise<{ added: number, errors: number }>}
 	 */
-	async put(query) {
-		let url = query.url;
+	static async put(target, data, context) {
+		let url = target.get ? target.get('url') : target.url;
 
 		await databases.prerender.Sitemap.put({ url });
 
@@ -175,7 +184,7 @@ export default class Sitemap extends Resource {
 			databases.local.RenderJob.put({
 				id: crypto.randomUUID(),
 				url: site.loc,
-				status: JobQueue.STATUS_TYPES.pending,
+				status: JobQueue.STATUS_TYPE.pending,
 				attempts: 0,
 			});
 		}
@@ -186,10 +195,12 @@ export default class Sitemap extends Resource {
 	/**
 	 * Delete a sitemap and its metadata from the database.
 	 *
+	 * @param {object} target - Resource target.
+	 * @param {object} context - Request context.
 	 * @returns {Promise<object>} Result of the database deletion.
 	 */
-	async delete() {
-		const url = this.getId();
+	static async delete(target, context) {
+		const url = target.id;
 		logger.info('Sitemap.delete', url);
 		return await databases.prerender.Sitemap.delete(url);
 	}

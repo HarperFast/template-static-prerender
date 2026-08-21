@@ -11,8 +11,16 @@
  * work with large sets of URLs provided by websites.
  */
 
+import { createRequire } from 'node:module';
 import Sitemapper from 'sitemapper';
-import { XMLParser } from 'fast-xml-parser';
+
+// Harper v5 loads app code through a VM module loader. The ESM named exports
+// of `fast-xml-parser` (a dual CJS/ESM package) fail to link there on Node 22+,
+// throwing `SyntaxError: The requested module 'fast-xml-parser' does not provide
+// an export named 'XMLParser'`. Load the CJS build via createRequire instead and
+// destructure from it — the workaround documented in the Harper v5 migration guide.
+const _require = createRequire(import.meta.url);
+const { XMLParser } = _require('fast-xml-parser');
 
 /**
  * Default User-Agent header used when fetching sitemaps.

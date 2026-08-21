@@ -15,6 +15,7 @@
  * - {@link CacheKey} for uniquely identifying cached content.
  */
 
+import { databases } from 'harper';
 import ManagedPage from './ManagedPage.js';
 import { render } from '../util/render.js';
 import CacheKey from '../util/CacheKey.js';
@@ -80,7 +81,8 @@ const pageSource = {
 			if (content instanceof Blob) {
 				content.on('error', (err) => {
 					logger.error('Blob error', err);
-					page.invalidate();
+					// Invalidate the cache entry via the table (v5: records are frozen plain objects)
+					databases.prerender.PageCache.invalidate(cacheKey);
 				});
 			}
 
@@ -140,12 +142,15 @@ export default class PageCache extends databases.prerender.PageCache {
 	/**
 	 * Retrieves cached page content with headers and status.
 	 * Sets gzip encoding by default.
+	 * @param {object} target - The request target (RequestTarget extends URLSearchParams).
 	 * @returns {Promise<object>} - Response with status, data, and headers.
 	 */
-	async get() {
-		if (!this.content) {
+	static async get(target) {
+		const record = await super.get(target);
+
+		if (!record?.content) {
 			return {
-				status: this.statusCode || 404,
+				status: record?.statusCode || 404,
 				data: {
 					data: 'Page Not Found',
 					contentType: 'text/plain',
@@ -153,34 +158,42 @@ export default class PageCache extends databases.prerender.PageCache {
 			};
 		}
 
-		// Check for blob errors
-		if (this.content instanceof Blob) {
-			this.content.on('error', (err) => {
+		// Check for blob errors. In v5, records are frozen plain objects — use
+		// databases.prerender.PageCache.invalidate(key) instead of record.invalidate().
+		if (record.content instanceof Blob) {
+			record.content.on?.('error', (err) => {
 				logger.error('Blob error', err);
-				this.invalidate();
+				databases.prerender.PageCache.invalidate(record.cacheKey);
 			});
 		}
 
-		let respHeaders = new Headers();
-		for (const [key, value] of Object.entries(JSON.parse(this.headers))) {
-			respHeaders.set(key, value);
-		}
-
-		if (!respHeaders.has('content-encoding')) {
-			respHeaders.set('content-encoding', 'gzip');
-		}
-
-		if (!respHeaders.has('content-type')) {
-			respHeaders.set('content-type', 'text/html; charset=utf-8');
+		// Build response headers as a plain object. Stored headers (if any) take
+		// precedence; defaults ensure content-type and content-encoding are always set.
+		// Note: do NOT return a Headers instance here — Harper v5's REST mergeHeaders
+		// calls new Headers(responseData.headers) which fails with a WHATWG Headers
+		// iterable. Pass a plain object instead.
+		let storedHeaders = {};
+		try {
+			storedHeaders = typeof record.headers === 'string'
+				? (JSON.parse(record.headers) || {})
+				: (record.headers || {});
+		} catch {
+			logger.warn('PageCache.get: could not parse stored headers for', record.cacheKey);
 		}
 
 		return {
-			status: this.statusCode || 200,
-			data: {
-				data: this.content,
-				contentType: 'text/html; charset=utf-8',
+			status: record.statusCode || 200,
+			// Return headers as a plain Record<string, string> (NOT a WHATWG Headers
+			// instance, which v5's REST mergeHeaders rejects). Without content-encoding
+			// the gzipped Blob would be served uncompressed and render as garbled binary.
+			headers: {
+				'content-type': storedHeaders['content-type'] || 'text/html; charset=utf-8',
+				'content-encoding': storedHeaders['content-encoding'] || 'gzip',
 			},
-			headers: respHeaders,
+			data: {
+				data: record.content,
+				contentType: storedHeaders['content-type'] || 'text/html; charset=utf-8',
+			},
 		};
 	}
 }

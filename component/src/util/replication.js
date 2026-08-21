@@ -16,7 +16,8 @@
  *
  * @type {string[]}
  */
-export const nodes = [server.hostname, ...server.nodes.map(({ name }) => name)];
+// server.nodes may be undefined in single-node / integration-test environments
+export const nodes = [server.hostname, ...(server.nodes ?? []).map(({ name }) => name)];
 
 /**
  * Select a random value from a non-empty array.

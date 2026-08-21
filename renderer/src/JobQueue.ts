@@ -1,7 +1,7 @@
 /**
  * @module JobQueue
  *
- * Provides a buffered job queue for workers that integrates with HarperDB
+ * Provides a buffered job queue for workers that integrates with Harper
  * via MQTT and on-demand HTTP fetches.
  *
  * Responsibilities:
@@ -51,7 +51,7 @@ export type JobQueueConfig = {
 /**
  * Local job queue for workers.
  *
- * Buffers jobs pulled from HarperDB, either via MQTT (`workerQueue` topic)
+ * Buffers jobs pulled from Harper, either via MQTT (`workerQueue` topic)
  * or via HTTP fetch when the buffer is low and upstream has jobs available.
  *
  * Extends {@link EventEmitter} to notify consumers:

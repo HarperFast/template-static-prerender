@@ -77,11 +77,11 @@ See below for **integration requirements**.
 Your custom render service must be configured with these environment variables. Reference the `.env.example` in `renderer` for more details:
 
 ```bash
-HDB_HOST=<harperdb-hostname>
+HDB_HOST=<harper-hostname>
 HDB_HTTP_PORT=<http-port>
 HDB_MQTT_PORT=<mqtt-port>
-HDB_USER=<harperdb-username>
-HDB_PASS=<harperdb-password>
+HDB_USER=<harper-username>
+HDB_PASS=<harper-password>
 WORKER_ID=<unique-worker-identifier>
 NODE_ENV=<production|development>
 ```

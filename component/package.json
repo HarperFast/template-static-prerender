@@ -5,7 +5,7 @@
   "description": "Harper component for caching prerendered static HTML pages",
   "type": "module",
   "author": {
-    "name": "HarperDB, Inc.",
+    "name": "Harper, Inc.",
     "email": "opensource@harperdb.io",
     "url": "https://harpersystems.dev/"
   },
@@ -19,8 +19,8 @@
     "email": "opensource@harperdb.io"
   },
   "scripts": {
-    "dev": "harperdb dev .",
-    "start": "harperdb run ."
+    "dev": "harper dev .",
+    "start": "harper run ."
   },
   "dependencies": {
     "@crawlee/utils": "^3.13.2",

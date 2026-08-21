@@ -11,6 +11,7 @@
  * This class extends the database-backed `PageMeta` resource and
  * provides constants for standard lifecycle statuses.
  */
+import { databases } from 'harper';
 export default class ManagedPage extends databases.prerender.PageMeta {
 	static directURLMapping = true;
 

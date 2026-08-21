@@ -36,16 +36,16 @@ The orchestrator communicates with renderer services through:
 
 ### Running locally
 
-1. `git clone https://github.com/HarperDB/template-static-prerender.git`
+1. `git clone https://github.com/HarperFast/template-static-prerender.git`
 2. `cd template-static-prerender`
 3. `npm install`
-4. `harperdb run .`
+4. `harper run .`
 
-This assumes you have the Harper stack already [installed]([Install HarperDB | HarperDB](https://docs.harperdb.io/docs/deployments/install-harperdb)) globally.
+This assumes you have the Harper stack already [installed]([Install Harper | Harper](https://docs.harperdb.io/learn/getting-started/install-and-connect-harper)) globally.
 
 ### Deployment
 
-Deploy the component using Harper"s **Operations API** via the [Harper CLI](https://docs.harperdb.io/docs/deployments/harper-cli#operations-api-through-the-cli).
+Deploy the component using Harper"s **Operations API** via the [Harper CLI](https://docs.harperdb.io/reference/v5/cli/overview#operations-api-through-the-cli).
 
 ---
 
@@ -67,7 +67,7 @@ The first two (2) endpoints are the primary means of interacting with this compo
 
 The `/render_jobs` endpoint is also used by renderer services to claim jobs and upload completed content through the orchestrator.
 
-The last five (5) endpoints provide low level control and direct access to Harper"s REST API. For a full description of what the REST API can do and how to use if your can refer to its [documentation](https://docs.harperdb.io/docs/developers/rest).
+The last five (5) endpoints provide low level control and direct access to Harper"s REST API. For a full description of what the REST API can do and how to use if your can refer to its [documentation](https://docs.harperdb.io/reference/v5/rest/overview).
 
 This REST interface for the various tables can be used to manually manipulate the data. See the [Data Model](#data-model) below for details on the structure of each table.
 
